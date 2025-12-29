@@ -1007,25 +1007,31 @@ async function analizarCorreos() {
           console.error("Error IA:", e.message); 
       }
 
-      // 10. ACTUALIZAR BASE DE DATOS
-      await docRef.update({
-          cv_url: publicCvUrl,          // Link Funcionando
-          tiene_pdf: true,
-          ia_score: analisisIA.score,   // Score Real
-          ia_motivos: analisisIA.motivos,
-          ia_alertas: analisisIA.alertas || [],
-          ia_status: "processed",
-          actualizado_en: admin.firestore.FieldValue.serverTimestamp()
-      });
+      // 10. ACTUALIZAR BASE DE DATOS (Master Update)
+      // Usamos .set con { merge: true } para asegurarnos de crear el 'stage' si no existe
+      await docRef.set({
+        cv_url: publicCvUrl,
+        tiene_pdf: true,
+        ia_score: analisisIA.score,
+        ia_motivos: analisisIA.motivos,
+        ia_alertas: analisisIA.alertas || [],
+        ia_status: "processed",
+        
+        // 🔥 ESTO ES LO QUE FALTABA: La etiqueta para el Frontend
+        stage: datosZoho.stage || 'stage_1', 
+        status_interno: datosZoho.status_interno || 'new',
+        
+        actualizado_en: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true }); // 'merge: true' cuida de no borrar el nombre ni el email
 
-      console.log(`✅ [OK] ${safeId} actualizado. Score Final: ${analisisIA.score}`);
-      await processedRef.set({ uid, status: "success", safeId, fecha: admin.firestore.FieldValue.serverTimestamp() });
-    }
-  } catch (error) {
-    console.error("❌ Error en analizarCorreos:", error);
-  } finally {
-    if (client) await client.logout();
+    console.log(`✅ [OK] ${safeId} actualizado. Score Final: ${analisisIA.score}`);
+    await processedRef.set({ uid, status: "success", safeId, fecha: admin.firestore.FieldValue.serverTimestamp() });
   }
+} catch (error) {
+  console.error("❌ Error en analizarCorreos:", error);
+} finally {
+  if (client) await client.logout();
+}
 }
 
 /////////////////// Anlisis de candidatos /////////////////////

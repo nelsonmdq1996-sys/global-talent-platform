@@ -656,38 +656,43 @@ const api = {
 function ExploreView({ candidates, onSelect, onUpdate, loading }) {
     const [filter, setFilter] = useState('');
 
-    // --- HELPERS INTERNOS (Para evitar errores de pantalla negra) ---
-    const simpleDate = (iso) => {
-        if (!iso) return '27 dic'; // Placeholder estético si no hay fecha
-        try {
-            const d = new Date(iso);
-            if (isNaN(d.getTime())) return '27 dic';
-            return d.getDate() + ' ' + d.toLocaleString('es-ES', { month: 'short' });
-        } catch (e) {
-            return '27 dic';
+    // --- HELPERS INTERNOS (CORREGIDOS PARA FIREBASE) ---
+    const parseFirebaseDate = (iso) => {
+        if (!iso) return null;
+        if (typeof iso === 'object' && iso._seconds) {
+            return new Date(iso._seconds * 1000);
         }
+        return new Date(iso);
+    };
+
+    const simpleDate = (iso) => {
+        const d = parseFirebaseDate(iso);
+        if (!d || isNaN(d.getTime())) return '-';
+        return d.getDate() + ' ' + d.toLocaleString('es-ES', { month: 'short' });
     };
 
     const isToday = (iso) => {
-        if (!iso) return false;
-        try {
-            const d = new Date(iso);
-            if (isNaN(d.getTime())) return false;
-            const today = new Date();
-            return d.getDate() === today.getDate() && 
-                   d.getMonth() === today.getMonth() && 
-                   d.getFullYear() === today.getFullYear();
-        } catch (e) {
-            return false;
-        }
+        const d = parseFirebaseDate(iso);
+        if (!d || isNaN(d.getTime())) return false;
+        
+        const today = new Date();
+        return d.getDate() === today.getDate() && 
+               d.getMonth() === today.getMonth() && 
+               d.getFullYear() === today.getFullYear();
     };
     
-    // 1. Ordenamiento Seguro
+    // 1. Ordenamiento Seguro (Usa el arreglador de fechas)
     const sortedCandidates = [...candidates].sort((a, b) => {
-        const dateA = a.fecha ? new Date(a.fecha) : new Date(0);
-        const dateB = b.fecha ? new Date(b.fecha) : new Date(0);
+        const dateA = parseFirebaseDate(a.fecha) || new Date(0);
+        const dateB = parseFirebaseDate(b.fecha) || new Date(0);
         return dateB - dateA;
     });
+
+    // 2. Filtrado (Se mantiene igual, pero usa la lista ya ordenada)
+    const filtered = sortedCandidates.filter(c => 
+        c.stage === 'stage_1' && 
+        (c.nombre.toLowerCase().includes(filter.toLowerCase()) || c.puesto.toLowerCase().includes(filter.toLowerCase()))
+    );
     
     // 2. Filtrado
     const filtered = sortedCandidates.filter(c => 
