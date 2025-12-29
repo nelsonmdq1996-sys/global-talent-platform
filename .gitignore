@@ -1,2 +1,9 @@
-node_modules
+.# Archivos de sistema y dependencias
+node_modules/
 .DS_Store
+
+# Archivos de secretos y entorno (LO IMPORTANTE)
+.env
+firebase-key.json
+serviceAccountKey.json
+*.log
