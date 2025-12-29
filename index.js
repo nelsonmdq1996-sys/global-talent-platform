@@ -884,11 +884,13 @@ REGLAS:
 }
 
 
-//////////////////////// extraer datos de la bandeja /////////////////
-
+// ========================================================================
+// 📩 ANALIZADOR DE CORREOS (VERSIÓN FINAL OPTIMIZADA)
+// ========================================================================
 async function analizarCorreos() {
   let client;
   try {
+    // 1. CONEXIÓN IMAP
     client = new ImapFlow({
       host: process.env.IMAP_HOST,
       port: parseInt(process.env.IMAP_PORT || "993"),
@@ -897,343 +899,134 @@ async function analizarCorreos() {
       keepAlive: { interval: 30000, idleInterval: 60000, forceNoop: true }
     });
 
-    client.on("error", (err) => {
-      console.error("⚠️ Error de conexión IMAP atrapado:", err.message);
-    });
-
-    console.log("🛡️ Listener de errores IMAP: ACTIVADO");
-
+    client.on("error", (err) => console.error("⚠️ Error IMAP:", err.message));
     await client.connect();
     await client.mailboxOpen("INBOX");
-    console.log("📬 INBOX abierto");
+    console.log("📬 INBOX abierto - Buscando CVs...");
 
-    const tempBase = path.join(os.tmpdir(), "cvs-en-proceso");
-    if (!fs.existsSync(tempBase)) fs.mkdirSync(tempBase, { recursive: true });
-
-    // ========================================================================
-    // CAMBIO 1: Usamos una colección nueva para reiniciar el contador a 0
-    // sin borrar los datos viejos.
-    // ========================================================================
+    // 2. GESTIÓN DE CONTROL (Evitar repetidos)
     const COLECCION_CONTROL = "emails_procesados_reintento_v2";
-
-    // Obtener último UID procesado de la NUEVA colección
     let lastUID = 0;
-    const snapshotLast = await firestore
-      .collection(COLECCION_CONTROL)
-      .orderBy("uid", "desc")
-      .limit(1)
-      .get();
+    const snapshotLast = await firestore.collection(COLECCION_CONTROL).orderBy("uid", "desc").limit(1).get();
+    if (!snapshotLast.empty) lastUID = parseInt(snapshotLast.docs[0].data().uid, 10);
 
-    if (!snapshotLast.empty) {
-      lastUID = parseInt(snapshotLast.docs[0].data().uid, 10);
-    }
-    console.log(`📩 Último UID procesado (${COLECCION_CONTROL}) → ${lastUID}`);
-
-
-    // BUCLE DE LECTURA
+    // 3. BUCLE DE LECTURA
     for await (const msg of client.fetch(`${lastUID + 1}:*`, { envelope: true, source: true, uid: true })) {
-
       const uid = msg.uid;
       const subject = msg.envelope.subject || "";
-      const from = msg.envelope.from?.[0]?.address || "";
+      
+      // Filtro rápido
+      if (!/^Postulación/i.test(subject) && !/^Video-CV/i.test(subject)) continue;
 
-      // Doble check por seguridad
       const processedRef = firestore.collection(COLECCION_CONTROL).doc(String(uid));
       if ((await processedRef.get()).exists) continue;
 
-      // Filtros de seguridad (Dominios y Asunto)
-      const allowedDomains = [".es", ".net", ".com"];
-      const isAllowedDomain = allowedDomains.some(domain => from.toLowerCase().endsWith(domain));
+      console.log(`🔎 Procesando correo: ${subject}`);
 
-      if (!isAllowedDomain) {
-        console.log(`⛔ Descartado por dominio: ${from}`);
+      // 4. PARSEO DEL CORREO
+      const parsed = await simpleParser(msg.source);
+      const bodyContent = parsed.text || parsed.html || "";
+
+      // 🔥 ID MATCHING ROBUSTO (Regex busca cualquier email en el cuerpo)
+      const emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/gi;
+      const todosLosEmails = bodyContent.match(emailRegex) || [];
+      // Excluye tus propios correos de sistema
+      const candidatoEmail = todosLosEmails.find(e => !e.includes("globaltalent") && !e.includes("zohocreator") && !e.includes("admin"));
+
+      if (!candidatoEmail) {
+        console.log("⚠️ No se detectó email de candidato. Saltando.");
+        await processedRef.set({ uid, status: "skipped_no_email", fecha: admin.firestore.FieldValue.serverTimestamp() });
         continue;
       }
 
-      if (!/^Postulación/i.test(subject) && !/^Video-CV/i.test(subject)) {
-        console.log(`⛔ Descartado por asunto: "${subject}"`);
-        continue;
-      }
+      // Generar ID idéntico al Webhook
+      const safeId = candidatoEmail.trim().toLowerCase().replace(/[^a-z0-9]/g, "_");
+      console.log(`🎯 Match ID: ${safeId}`);
 
-      console.log(`✅ Procesando email válido: ${subject} (UID: ${uid})`);
-
-      const parsed = await simpleParser(msg.source, { skipAttachments: false });
-      const body = parsed.html ? parsed.html : parsed.text;
-
-      // Detectar email del candidato
-      let applicantEmail = null;
-      const emails = body.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi);
-      if (emails) applicantEmail = emails.find(e => !/globaltalentconnections\.net$/i.test(e));
-      // Si no encuentra email en el cuerpo, usa el del remitente
-      if (!applicantEmail) applicantEmail = from;
-
-      // Nombre temporal para carpeta
-      const nombre = normalizeText(
-        extractNameFromBody(body, { knownEmail: applicantEmail }) || "Sin_Nombre"
-      ).replace(/\s+/g, "_");
-
-      const dir = path.join(tempBase, nombre);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-      // ========================================================================
-      // CAMBIO 2: Lógica para detectar PDF y Video por separado
-      // ========================================================================
-      let videoPath = null;
-      let pdfPath = null;
-      let pdfFilename = "";
-
-      for (const att of parsed.attachments || []) {
-        const ext = path.extname(att.filename || "").toLowerCase();
-        const save = path.join(dir, att.filename);
-        fs.writeFileSync(save, att.content);
-
-        if ([".mp4", ".mov", ".mkv"].includes(ext)) {
-          videoPath = save;
-        }
-        // AQUI ATRAPAMOS EL PDF
-        else if (ext === ".pdf") {
-          pdfPath = save;
-          pdfFilename = att.filename;
-        }
-      }
-
-      // IMPORTANTE: Ahora procesamos si hay video O si hay PDF. Antes solo si había video.
-      if (!videoPath && !pdfPath) {
-        console.log("⚠️ Sin video ni PDF, correo omitido.");
-        // Aun así marcamos como leído para no trabar el loop
-        await processedRef.set({ uid, from, subject, status: "skipped_no_files", fecha: admin.firestore.FieldValue.serverTimestamp() });
-        continue;
-      }
-
-      // -----------------------------------------------------------------------
-      // 🧠 ZOHO PARSER MEJORADO (Integrado directamente aquí)
-      // -----------------------------------------------------------------------
-      const { text, html, date } = parsed;
-      const fechaIngesta = new Date();
-
-      // Determinar Carpeta de destino
-      const puestoDetectado = subject.replace(/^Postulación[-:\s]*/i, "").replace(/^Video-CV[-:\s]*/i, "").trim();
-      const carpetaClasificada = await mapAreaToFolder(puestoDetectado);
-
-      // ========================================================================
-      // CAMBIO 3: Subida del PDF a Firebase Storage (La clave para Viviana)
-      // ========================================================================
-      let cvStoragePath = null;
-      let cvUrl = null;
-
-      if (pdfPath && STORAGE_READY) {
-        try {
-          // Limpiamos nombre de archivo y email para que no den error en la ruta
-          const safeFilename = pdfFilename.replace(/[^a-zA-Z0-9.-]/g, "_");
-          const safeEmail = applicantEmail.replace(/[^a-zA-Z0-9]/g, "_");
-
-          // Ruta ordenada: CV-clasificador / Carpeta / email_fecha.pdf
-          const destination = `CV-clasificador/${carpetaClasificada}/${safeEmail}_${Date.now()}.pdf`;
-
-          await bucket.upload(pdfPath, {
-            destination: destination,
-            metadata: { contentType: 'application/pdf' }
-          });
-
-          // Generamos URL firmada de larga duración (actúa como link permanente)
-          const [url] = await bucket.file(destination).getSignedUrl({
-            action: 'read',
-            expires: '01-01-2030'
-          });
-
-          cvStoragePath = destination;
-          cvUrl = url;
-          console.log(`📤 PDF subido exitosamente a: ${destination}`);
-        } catch (uploadErr) {
-          console.error("❌ Error subiendo PDF a Storage:", uploadErr.message);
-        }
-      }
-
-      // ============================================================
-      // 🟢 SOLUCIÓN ZOHO: LIMPIEZA DE HTML (ANTI-BUGS)
-      // ============================================================
-
-      // 1. OBTENER Y LIMPIAR EL CONTENIDO RAW
-      // Zoho manda HTML (<div>Lionel...</div>), así que debemos limpiarlo a la fuerza.
-      let rawContent = (html || text || body || "");
+      // 5. BUSCAR PDF ADJUNTO
+      const pdfAttachment = parsed.attachments.find(a => a.contentType === "application/pdf" || a.filename.toLowerCase().endsWith(".pdf"));
       
-      let textoLimpio = rawContent
-          .replace(/<br\s*\/?>/gi, "\n") // Convierte <br> en saltos de línea
-          .replace(/<\/p>/gi, "\n")      // Convierte </p> en saltos de línea
-          .replace(/<[^>]*>/g, "")       // BORRA todas las etiquetas (<div>, <span>, etc.)
-          .replace(/&nbsp;/g, " ")       // Reemplaza espacios de código
-          .replace(/&amp;/g, "&");       // Reemplaza ampersands
-
-      // Array de líneas limpias, sin espacios vacíos
-      const lineas = textoLimpio
-          .split('\n')
-          .map(l => l.trim())
-          .filter(l => l.length > 1); // Ignora líneas vacías
-
-      // 2. DETECTAR EMAIL (Regex estricto)
-      // Busca algo que parezca un email real en las líneas limpias
-      const emailRegex = /[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
-      const lineaEmail = lineas.find(l => emailRegex.test(l));
-      let emailDetectado = lineaEmail ? (lineaEmail.match(emailRegex)[0]) : "";
-
-      // 3. DETECTAR NOMBRE
-      // Busca la primera línea que NO sea email, NO sea 'Video-CV' y tenga texto
-      let nombreDetectado = lineas.find(l => 
-          l.length > 2 && 
-          !l.includes("@") && 
-          !l.toLowerCase().includes("video-cv") &&
-          !l.toLowerCase().includes("asistente de")
-      );
-
-      // 4. FALLBACK AL PDF
-      if (!nombreDetectado && typeof pdfFilename !== 'undefined' && pdfFilename) {
-         nombreDetectado = pdfFilename.replace(/\.pdf$/i, "").replace(/[-_]/g, " ");
-      }
-      if (!nombreDetectado) nombreDetectado = "Candidato Zoho";
-
-      // 5. LÓGICA DE ADMIN (Protección de identidad)
-      let candidatoEmailFinal = emailDetectado || applicantEmail || "";
-
-      const senderAddress = typeof from !== 'undefined' ? from : "";
-      const esAdmin = (email) => email && (email.includes("globaltalentconnections") || email === senderAddress);
-
-      if (esAdmin(candidatoEmailFinal)) {
-          if (applicantEmail && !esAdmin(applicantEmail)) {
-              candidatoEmailFinal = applicantEmail;
-          }
-      }
-      if (!candidatoEmailFinal && senderAddress && !esAdmin(senderAddress)) {
-          candidatoEmailFinal = senderAddress;
+      if (!pdfAttachment) {
+        console.log("⚠️ Sin PDF adjunto.");
+        await processedRef.set({ uid, status: "skipped_no_pdf", fecha: admin.firestore.FieldValue.serverTimestamp() });
+        continue;
       }
 
-      // 6. LIMPIEZA FINAL Y CREACIÓN DE VARIABLES
-      const emailLimpio = candidatoEmailFinal.toLowerCase().trim();
-      // Regex: Solo permite letras y espacios en el nombre
-      const nombreLimpio = nombreDetectado.replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑ ]/g, "").trim();
-      const candidatoId = emailLimpio.replace(/[^a-z0-9]/g, '_');
+      // 6. SUBIR A STORAGE (Arregla el Link)
+      const bucketFile = bucket.file(`CVs_staging/files/${safeId}_CV.pdf`);
+      await bucketFile.save(pdfAttachment.content, { metadata: { contentType: "application/pdf" } });
+      const [publicCvUrl] = await bucketFile.getSignedUrl({ action: 'read', expires: '01-01-2035' });
+      console.log("📤 Link generado correctamente.");
 
-      // --- LOGICA IA Y VIDEO (Se mantiene igual) ---
-      let declaraciones = "";
-      if (videoPath) {
-        try {
-          const wav = await extractAudioMono16k(videoPath);
-          const transcript = await openai.audio.transcriptions.create({
-            file: fs.createReadStream(wav),
-            model: "whisper-1",
-          });
-          declaraciones = transcript.text || "";
-        } catch {
-          console.log("⚠️ Error transcribiendo video.");
-        }
+      // 7. RECUPERAR DATOS DEL WEBHOOK
+      const docRef = firestore.collection("CVs_staging").doc(safeId);
+      const docSnap = await docRef.get();
+      
+      let datosZoho = { respuestas_filtro: {} };
+      if (docSnap.exists) datosZoho = docSnap.data();
+      else {
+          // Fallback por si el mail llega antes que el webhook
+          await docRef.set({ id: safeId, email: candidatoEmail, nombre: "Candidato (Mail)", origen: "mail_first" }, { merge: true });
       }
 
-      // ========================================================================
-     // 1. PARSEO Y ORDENAMIENTO (Variables V3 para evitar conflictos)
-     // ========================================================================
-     
-     // Extraemos texto y json parcial con nombres únicos
-     const { textoPlano: textoPlano_V3, jsonParcial: jsonParcial_V3 } = parsearCorreoEstandar(textoLimpio);
-     console.log("📝 Texto extraído (inicio):", textoPlano_V3.substring(0, 50)); 
+      // 8. LEER TEXTO DEL PDF (CRÍTICO: Aquí leemos el CV real)
+      let pdfText = "";
+      try {
+          const pdfData = await pdfParse(pdfAttachment.content);
+          pdfText = pdfData.text.slice(0, 20000); // Leemos hasta 20k caracteres
+      } catch (e) { console.error("Error leyendo PDF:", e.message); }
 
-     // Pasamos la variable V3 a la IA
-     const datosIA = await organizarCVconIA({
-       textoPlano: textoPlano_V3, 
-       nombreArchivo: `${nombreLimpio}.txt`,
-       email: emailLimpio,
-       puesto: puestoDetectado,
-     });
+      // 9. IA CALIBRADA (Cruce de Datos: Formulario vs PDF)
+      console.log("🤖 Calibrando Score (Formulario vs PDF)...");
+      const prompt = `
+        ACTÚA COMO: Reclutador Senior.
+        TAREA: Calibrar Score cruzando respuestas del formulario con el CV real.
 
-     // Objeto final unificado
-     const datos = {
-       ...jsonParcial_V3, 
-       ...datosIA,
-       nombre: nombreLimpio, 
-       correo_electronico: emailLimpio,
-       puesto: datosIA?.puesto || puestoDetectado,
-     };
+        1. RESPUESTAS FORMULARIO (Zoho):
+        ${JSON.stringify(datosZoho.respuestas_filtro || "Vacio")}
 
-     // ========================================================================
-     // 2. EVALUACIÓN DE SKILLS (GEMINI)
-     // ========================================================================
-     let ver = { pasa: true, score: 50, motivos: "Evaluación pendiente" };
-     try {
-        // OJO AQUÍ: Usamos 'textoPlano_V3' que es la variable válida
-        ver = await verificaConocimientosMinimos(datos.puesto, textoPlano_V3, declaraciones);
-     } catch (e) { 
-        console.log("⚠️ Saltando verificación IA por error:", e.message); 
-     }
+        2. CV REAL (PDF):
+        ${pdfText || "Sin texto"}
 
-     // Embeddings desactivados
-     const embedding = []; 
-     const vector_experiencia = [];
+        REGLAS DE CALIBRACIÓN:
+        - Si el formulario es vago pero el CV es fuerte -> Score 70-80.
+        - Si el formulario miente (dice experto y el CV no lo muestra) -> Score 0-40.
+        - Si rechaza Salario/Monitoreo en el formulario -> Score 0.
+        - Si ambos son fuertes -> Score 90-100.
 
-// ========================================================================
-     // 3. GUARDADO FINAL (FUSIÓN INTELIGENTE: WEBHOOK + EMAIL)
-     // ========================================================================
+        SALIDA JSON: { "score": number, "motivos": "string", "alertas": ["string"] }
+      `;
 
-     // 1. Apuntamos a la misma colección que el Webhook ("CVs_staging")
-     const docRef = firestore.collection("CVs_staging").doc(candidatoId);
-     const docSnap = await docRef.get();
-     
-     let datosPrevios = {};
-     if (docSnap.exists) {
-         console.log(`🔄 Encontrado candidato existente (Webhook): ${candidatoId}`);
-         datosPrevios = docSnap.data();
-     }
+      let analisisIA = { score: 50, motivos: "Pendiente", alertas: [] };
+      try {
+          const result = await model.generateContent(prompt);
+          const responseText = result.response.text().replace(/```json/g, "").replace(/```/g, "").trim();
+          const jsonString = responseText.substring(responseText.indexOf('{'), responseText.lastIndexOf('}') + 1);
+          analisisIA = JSON.parse(jsonString);
+      } catch (e) { 
+          console.error("Error IA:", e.message); 
+      }
 
-     const payloadFinal = {
-       ...datosPrevios, // Mantenemos lo que ya trajo el Webhook (respuestas, salario, etc.)
-       ...datos,        // Agregamos datos extra del mail si los hay
-       
-       id: candidatoId,
-       email: emailLimpio,
-       
-       // 🔥 AQUÍ OCURRE LA MAGIA: El Link de Firebase pisa al link roto de Zoho
-       // Si subimos un PDF a Storage (cvUrl), lo usamos. Si no, dejamos el que estaba.
-       cv_storage_path: cvStoragePath || datosPrevios.cv_storage_path || null, 
-       cv_url: cvUrl || datosPrevios.cv_url || "", 
-       tiene_pdf: !!cvUrl || !!datosPrevios.cv_url, // Flag para el frontend
-       
-       // Protegemos el Score y el Motivo para que el mail no los borre si ya existen
-       ia_score: datosPrevios.ia_score || ver.score || 0,
-       ia_motivos: datosPrevios.ia_motivos || ver.motivos || "Análisis pendiente",
-       ia_alertas: datosPrevios.ia_alertas || ver.alertas || [],
-       
-       actualizado_en: admin.firestore.FieldValue.serverTimestamp(),
-       origen_datos: "fusion_webhook_email"
-     };
+      // 10. ACTUALIZAR BASE DE DATOS
+      await docRef.update({
+          cv_url: publicCvUrl,          // Link Funcionando
+          tiene_pdf: true,
+          ia_score: analisisIA.score,   // Score Real
+          ia_motivos: analisisIA.motivos,
+          ia_alertas: analisisIA.alertas || [],
+          ia_status: "processed",
+          actualizado_en: admin.firestore.FieldValue.serverTimestamp()
+      });
 
-     // Guardamos en la colección MAESTRA
-     await docRef.set(payloadFinal, { merge: true });
-
-     console.log(`✅ Fusión completada para: ${candidatoId} | CV Link Actualizado: ${!!cvUrl}`);
-
-     // Marcar email como procesado (esto no cambia)
-     await processedRef.set({
-       uid,
-       from,
-       subject,
-       fecha: admin.firestore.FieldValue.serverTimestamp(),
-       status: "ok_merged"
-     });
-
-     // Limpieza de temporales
-     fs.rmSync(dir, { recursive: true, force: true });
-
-  } // 1. Cierre del bucle "for await"
-
-} catch (error) {
-  // 2. EL CATCH QUE FALTABA
-  console.error("❌ Error fatal en el ciclo de correos:", error);
-} finally {
-  // 3. EL FINALLY PARA CERRAR CONEXIÓN (Buena práctica)
-  if (client) {
-    await client.logout();
-    console.log("🔒 Conexión IMAP cerrada.");
+      console.log(`✅ [OK] ${safeId} actualizado. Score Final: ${analisisIA.score}`);
+      await processedRef.set({ uid, status: "success", safeId, fecha: admin.firestore.FieldValue.serverTimestamp() });
+    }
+  } catch (error) {
+    console.error("❌ Error en analizarCorreos:", error);
+  } finally {
+    if (client) await client.logout();
   }
 }
-
-} // 4. Cierre FINAL de la función analizarCorreos
 
 /////////////////// Anlisis de candidatos /////////////////////
 
@@ -3033,113 +2826,56 @@ async function verificaConocimientosMinimos(puesto, textoCandidato, declaracione
     return { score: 50, pasa: false, motivos: "Error de análisis IA. Revisar manual.", alertas: ["Error IA"] };
   }
 }
-// ==========================================
-// 🚀 1. WEBHOOK ZOHO (CONFIGURACIÓN DEFINITIVA)
-// ==========================================
 app.post("/webhook/zoho", async (req, res) => {
   try {
-    console.log("📨 Webhook Zoho recibido.");
-    // Log para ver si llega algo raro, pero confiamos en tu mapa
-    console.log("📦 PAYLOAD:", JSON.stringify(req.body, null, 2));
-
+    console.log("📨 [Webhook] Datos recibidos de Zoho. Iniciando modo PASIVO.");
     const data = req.body;
+
+    // 1. SANITIZACIÓN ID (CRÍTICO: Mismo método que usaremos en el Email)
+    const emailRaw = (data.Email || "").trim().toLowerCase();
+    if (!emailRaw) return res.status(400).send("Falta Email");
     
-    // 1. SANITIZACIÓN DE ID Y NOMBRE
-    const emailRaw = data.Email || "sin_email@candidato.com";
-    const safeId = emailRaw.replace(/[^a-z0-9]/g, "_").toLowerCase();
-    
-    // Unimos Nombre y Apellido (según tu mapa JSON)
-    const nombreFinal = `${data.Nombre_Completo || "Candidato"} ${data.Apellido || ""}`.trim();
+    // ID ÚNICO: grillo.vge98@gmail.com -> grillo_vge98_gmail_com
+    const safeId = emailRaw.replace(/[^a-z0-9]/g, "_");
 
-    // 2. EXTRACCIÓN DIRECTA (Usando las llaves de tu captura)
-    const respuestas = {
-        salario: data.Acepta_Salario || "No especificado",
-        monitoreo: data.Acepta_Monitoreo || "No especificado",
-        disponibilidad: data.Disponibilidad || "No especificado",
-        internet: data.Internet_Info || "No especificado",
-        herramientas: data.Top_Herramientas || "No detallado",
-        logro: data.Logro_Destacado || "No detallado",
-        resolucion: data.Resolucion_Problemas || "No detallado"
-    };
-
-    // Video: Mapeo directo de tu campo <SingleLine2>
-    // Si viene vacío, dejamos string vacío
-    const videoLink = data.Video_Link || ""; 
-
-    // 3. PREPARACIÓN DE TEXTO PARA LA IA
-    const textoParaIA = `
-      CANDIDATO: ${nombreFinal} 
-      PUESTO: ${data.Puesto_Solicitado || "General"}
-      
-      === 1. FILTROS EXCLUYENTES ===
-      - Salario Aceptado: ${respuestas.salario}
-      - Monitoreo Aceptado: ${respuestas.monitoreo}
-      - Disponibilidad: ${respuestas.disponibilidad}
-      - Conectividad: ${respuestas.internet}
-
-      === 2. EVALUACIÓN CUALITATIVA ===
-      - Top Herramientas: ${respuestas.herramientas}
-      - Logro Real: ${respuestas.logro}
-      - Capacidad de Resolución: ${respuestas.resolucion}
-      
-      === 3. PERFIL TÉCNICO ===
-      (Ver CV adjunto en enlace)
-    `;
-
-    // 4. LLAMADA A LA IA (Evaluación)
-    let ver = { pasa: true, score: 50, motivos: "Análisis pendiente", alertas: [] };
-    try {
-       // Usamos tu función maestra de IA
-       ver = await verificaConocimientosMinimos(data.Puesto_Solicitado, textoParaIA, "");
-    } catch (e) {
-       console.log("⚠️ IA Error:", e.message);
-       ver.motivos = "Error conectando con IA. Revisar manualmente.";
-    }
-
-    // 5. CONSTRUCCIÓN DEL OBJETO CANDIDATO (Modelo Frontend)
+    // 2. OBJETO BASE (Sin IA todavía)
     const candidato = {
       id: safeId,
-      nombre: nombreFinal, 
+      nombre: `${data.Nombre_Completo || ""} ${data.Apellido || ""}`.trim(),
       email: emailRaw,
       telefono: data.Telefono || "",
       puesto: data.Puesto_Solicitado || "General",
       
-      // URLs y Archivos
-      cv_url: data.CV_Link || "", 
-      video_url: videoLink, // <--- Aquí entra tu link de Drive
-      
-      // Datos visuales para el Dashboard
-      respuestas_filtro: respuestas, 
-      
-      // Estado del Pipeline
-      coleccion_origen: "CVs_staging", // Según acordamos
-      status_interno: "new",           // Entra a EXPLORAR
-      
-      // Resultados IA
-      ia_score: ver.score || 0,
-      ia_pasa: ver.pasa,
-      ia_motivos: ver.motivos || "Sin motivos registrados.",
-      ia_alertas: ver.alertas || [], 
+      // Guardamos las respuestas para que la IA las lea DESPUÉS (cuando llegue el mail)
+      respuestas_filtro: {
+        salario: data.Acepta_Salario,
+        monitoreo: data.Acepta_Monitoreo,
+        disponibilidad: data.Disponibilidad,
+        herramientas: data.Top_Herramientas,
+        resolucion: data.Resolucion_Problemas
+      },
 
-      // Metadatos
-      origen: "webhook_zoho",
-      fecha: new Date().toISOString(),
-      creado_en: admin.firestore.FieldValue.serverTimestamp()
+      // ESTADO INICIAL: "ESPERANDO PDF"
+      ia_score: 0,
+      ia_status: "waiting_cv", // El frontend puede mostrar un spinner o "Cargando CV..."
+      ia_motivos: "Esperando recepción de CV para análisis completo.",
+      
+      cv_url: "", // Vacío por ahora
+      tiene_pdf: false,
+      
+      creado_en: admin.firestore.FieldValue.serverTimestamp(),
+      origen: "webhook_zoho_passive"
     };
 
-    // 6. GUARDADO EN FIRESTORE
-    // Guardamos en la colección principal
-    await firestore.collection("CVs_staging").doc(candidato.id).set(candidato, { merge: true });
-    
-    // (Opcional) Backup en cv_revisados para métricas históricas
-    await firestore.collection("cv_revisados").doc(candidato.id).set({ ...candidato, motivos: ver.motivos }, { merge: true });
+    // 3. GUARDAR EN LA CARPETA MADRE
+    await firestore.collection("CVs_staging").doc(safeId).set(candidato, { merge: true });
 
-    console.log(`✅ Guardado Exitoso: ${candidato.nombre} | Score: ${candidato.ia_score} | Video: ${!!videoLink}`);
+    console.log(`✅ [Webhook] Candidato guardado en espera: ${safeId}`);
     res.status(200).send("OK");
 
   } catch (error) {
     console.error("❌ Error Webhook:", error);
-    res.status(500).send("Error interno");
+    res.status(500).send("Error");
   }
 });
 
