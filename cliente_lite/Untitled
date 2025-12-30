@@ -1,0 +1,158 @@
+// --- COMPONENTE LOGIN (PORTERÍA DE ACCESO) ---
+const LoginView = ({ onLogin }) => {
+    const team = [
+        { name: "Gladymar", role: "Recursos Humanos" },
+        { name: "Sandra", role: "Recursos Humanos" },
+        { name: "Viviana (RRHH)", role: "Recursos Humanos" },
+        { name: "Pilar (Closer)", role: "Ventas / Closer" },
+        { name: "Norma (Calidad)", role: "Control de Calidad" },
+        { name: "Daniel (CEO)", role: "Dirección" },
+        { name: "Admin", role: "Superusuario" }
+    ];
+    
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-950 relative overflow-hidden">
+            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 pointer-events-none"></div>
+            <div className="relative z-10 w-full max-w-md p-8 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl animate-in fade-in zoom-in duration-300">
+                <div className="text-center mb-8">
+                    <h1 className="text-3xl font-bold text-white mb-2 tracking-tight">Global Talent</h1>
+                    <p className="text-slate-400 text-sm italic">"Conectando talento, automáticamente"</p>
+                </div>
+
+                <div className="space-y-3">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] text-center mb-4">Seleccioná tu perfil de acceso</p>
+                    {team.map(user => (
+                        <button 
+                            key={user.name}
+                            onClick={() => onLogin(user.name)}
+                            className="w-full p-4 rounded-xl bg-slate-800 hover:bg-blue-600 border border-slate-700 hover:border-blue-500 transition-all group flex items-center justify-between"
+                        >
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full bg-slate-700 group-hover:bg-white/20 flex items-center justify-center text-white font-bold text-sm shadow-inner">
+                                    {user.name.charAt(0)}
+                                </div>
+                                <div className="text-left">
+                                    <p className="font-bold text-slate-200 group-hover:text-white leading-none">{user.name}</p>
+                                    <p className="text-[10px] text-slate-500 group-hover:text-blue-100 uppercase mt-1.5 font-medium tracking-wider">{user.role}</p>
+                                </div>
+                            </div>
+                            <LucideIcon name="ChevronRight" size={16} className="text-slate-600 group-hover:text-white transition-transform group-hover:translate-x-1" />
+                        </button>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// --- APP CONTAINER ---
+function App() {
+    // 1. ESTADOS (HOOKS) - Siempre arriba de todo
+    const [activeTab, setActiveTab] = useState('dashboard');
+    const [currentReport, setCurrentReport] = useState(null);
+    const [selectedCandidateId, setSelectedCandidateId] = useState(null);
+    const [candidates, setCandidates] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [init, setInit] = useState(false);
+    const [currentUser, setCurrentUser] = useState(null); 
+
+    const LOGO_URL = "./GLOBAL.jpg";
+
+    // 2. FUNCIÓN DE CARGA
+    const cargarDatos = async (forceRefresh = false) => {
+        if (init && !forceRefresh) return;
+        setLoading(true);
+        const CACHE_KEY = 'global_talent_cache_v1';
+        const CACHE_TIME_KEY = 'global_talent_time';
+        const VALIDEZ_MINUTOS = 15;
+
+        try {
+            const now = new Date().getTime();
+            const cachedRaw = localStorage.getItem(CACHE_KEY);
+            const cachedTime = localStorage.getItem(CACHE_TIME_KEY);
+
+            if (!forceRefresh && cachedRaw && cachedTime) {
+                const edadMinutos = (now - parseInt(cachedTime)) / (1000 * 60);
+                if (edadMinutos < VALIDEZ_MINUTOS) {
+                    setCandidates(JSON.parse(cachedRaw));
+                    setInit(true);
+                    setLoading(false);
+                    return;
+                }
+            }
+            const data = await api.candidates.list();
+            localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+            localStorage.setItem(CACHE_TIME_KEY, now.toString());
+            setCandidates(data);
+            setInit(true);
+        } catch (error) {
+            console.error("❌ Error cargando datos:", error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // 3. EFECTOS (HOOKS)
+    useEffect(() => { 
+        if (currentUser) cargarDatos(); 
+    }, [currentUser]);
+
+    // 4. LA PORTERÍA (RECIÉN AQUÍ EL IF)
+    if (!currentUser) {
+        return <LoginView onLogin={(name) => setCurrentUser(name)} />;
+    }
+
+    // 5. LÓGICA DE ACTUALIZACIÓN (USANDO EL USUARIO ACTUAL)
+    const handleUpdateCandidate = async (id, updates) => {
+        let finalUpdates = { ...updates };
+        
+        if (updates.stage === 'stage_2') {
+            finalUpdates.assignedTo = currentUser; // Estampa automática
+            finalUpdates.status_interno = 'interview_pending';
+        }
+
+        if (updates.stage === 'trash' || updates.stage === 'stage_3') {
+            setSelectedCandidateId(null);
+        }
+
+        setCandidates(prev => prev.map(c => {
+            if (c.id === id) {
+                if (activeTab === 'stage_1' && c.status_interno === 'new' && !updates.stage) {
+                    finalUpdates.status_interno = 'viewed';
+                }
+                return { ...c, ...finalUpdates };
+            }
+            return c;
+        }));
+
+        await api.candidates.update(id, finalUpdates);
+    };
+
+    const handleSelectCandidate = (id) => {
+        setSelectedCandidateId(id);
+        handleUpdateCandidate(id, {});
+    };
+
+    const renderContent = () => {
+        if (currentReport) {
+            return <ProfessionalReport data={currentReport} onBack={() => setCurrentReport(null)} />;
+        }
+
+        if (selectedCandidateId) {
+            const cand = candidates.find(c => c.id === selectedCandidateId);
+            if (!cand) {
+                setSelectedCandidateId(null);
+                return null;
+            }
+            return (
+                <CandidateDetail 
+                    key={cand.id} 
+                    candidate={cand} 
+                    onBack={() => setSelectedCandidateId(null)} 
+                    onUpdate={handleUpdateCandidate} 
+                    loading={loading}
+                    currentUser={currentUser} // Pasamos el usuario logueado
+                />
+            );
+        }
+        // ... (continúa el resto del switch que tenías antes)

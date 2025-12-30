@@ -267,30 +267,34 @@ const api = {
                         const data = await res.json();
                         const lista = data.resultados || [];
                         return lista.map(c => ({
-                            id: c.id,
-                            nombre: c.nombre || "Sin Nombre",
-                            email: c.email || "S/E",
-                            puesto: c.puesto || "General",
-                            
-                            // 🔥 DATOS CLAVE QUE FALTABAN
-                            ia_score: c.ia_score || 0,
-                            ia_motivos: c.ia_motivos || c.motivo || "Análisis pendiente...", 
-                            ia_alertas: c.ia_alertas || [],
-                            respuestas_filtro: c.respuestas_filtro || {}, // <--- ESTO TRAE SALARIO/MONITOREO
-                            
-                            // 🎥 VIDEO Y ARCHIVOS
-                            cv_url: c.cv_url || '#',
-                            video_url: c.video_url || null, // <--- ESTO TRAE EL LINK AZUL
-                            
-                            // ESTADOS
-                            fecha: c.fecha || c.creado_en,
-                            stage: c.stage || (c.status_interno === 'new' ? 'stage_1' : 'stage_1'), 
-                            status_interno: c.status_interno || 'new',
-                            
-                            notes: c.motivo || '', 
-                            history: c.historial_movimientos || [],
-                            informe_final_data: c.informe_final_data || null
-                        }));
+                        id: c.id,
+                        nombre: c.nombre || "Sin Nombre",
+                        email: c.email || "S/E",
+                        puesto: c.puesto || "General",
+                        
+                        // 🔥 DATOS DE IA Y FILTROS
+                        ia_score: c.ia_score || 0,
+                        ia_motivos: c.ia_motivos || c.motivo || "Análisis pendiente...", 
+                        ia_alertas: c.ia_alertas || [],
+                        respuestas_filtro: c.respuestas_filtro || {}, 
+                        
+                        // 🎥 VIDEO Y ARCHIVOS (ARREGLADO PARA ZOHO)
+                        cv_url: c.cv_url || '#',
+                        // Aquí agregamos c.Video_Link para que lea lo que viene del formulario
+                        video_url: c.video_url || c.Video_Link || null, 
+                        
+                        // ESTADOS
+                        fecha: c.fecha || c.creado_en,
+                        stage: c.stage || (c.status_interno === 'new' ? 'stage_1' : 'stage_1'), 
+                        status_interno: c.status_interno || 'new',
+                        
+                        // 👇 ESTOS SON LOS DOS CABLES QUE FALTABAN PARA LA PERSISTENCIA 👇
+                        assignedTo: c.assignedTo || null,      
+                        history: c.history || c.historial_movimientos || [], 
+                        
+                        notes: c.motivo || c.notes || '', 
+                        informe_final_data: c.informe_final_data || null
+                    }));
                     } catch (error) {
                         console.error("Error cargando:", error);
                         return []; 
@@ -311,8 +315,16 @@ const api = {
                     }
                 },
                 manualUpload: async (formData) => {
-                    const res = await fetch(`${API_URL}/manual-upload`, { method: 'POST', body: formData });
-                    return await res.json();
+                    try {
+                        const res = await fetch(`${API_URL}/candidatos/ingreso-manual`, { 
+                            method: 'POST', 
+                            body: formData 
+                        });
+                        return await res.json();
+                    } catch (e) {
+                        console.error("Error en upload:", e);
+                        return { ok: false, error: e.message };
+                    }
                 }
             },
             metrics: {
@@ -651,9 +663,53 @@ const api = {
                 </div>
             );
         }
+        // --- VISTA DE CARGA MANUAL ---
+        function ManualUploadModal({ isOpen, onClose, onUploadSuccess }) {
+    const [loading, setLoading] = React.useState(false);
+    const [file, setFile] = React.useState(null);
+    if (!isOpen) return null;
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        const formData = new FormData(e.target);
+        if (file) formData.append('cv', file);
+        const result = await api.candidates.manualUpload(formData);
+        if (result.ok || result.id) {
+            alert("✅ Candidato cargado con éxito. Iniciando análisis IA...");
+            onUploadSuccess();
+            onClose();
+        } else {
+            alert("❌ Error: " + (result.error || "No se pudo subir"));
+        }
+        setLoading(false);
+    };
+
+    return (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md shadow-2xl animate-in zoom-in duration-200">
+                <h2 className="text-xl font-bold text-white mb-4">Carga Manual de Candidato</h2>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <input name="nombre" required className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-sm outline-none focus:border-blue-500" placeholder="Nombre Completo" />
+                    <input name="email" type="email" required className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-sm outline-none focus:border-blue-500" placeholder="Email" />
+                    <input name="puesto" required className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-sm outline-none focus:border-blue-500" placeholder="Puesto Objetivo" />
+                    <div className="border-2 border-dashed border-slate-800 rounded-xl p-4 text-center">
+                        <input type="file" accept=".pdf" required onChange={e => setFile(e.target.files[0])} className="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500" />
+                    </div>
+                    <div className="flex gap-3 mt-6">
+                        <button type="button" onClick={onClose} className="flex-1 px-4 py-2 bg-slate-800 text-slate-400 rounded-lg text-sm font-bold">Cancelar</button>
+                        <button type="submit" disabled={loading} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold disabled:opacity-50">
+                            {loading ? "Analizando..." : "Subir y Analizar"}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+}
 
         // --- VISTA EXPLORAR TALENTO (CORREGIDA) ---
-function ExploreView({ candidates, onSelect, onUpdate, loading }) {
+function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
     const [filter, setFilter] = useState('');
 
     // --- HELPERS INTERNOS (CORREGIDOS PARA FIREBASE) ---
@@ -708,21 +764,25 @@ function ExploreView({ candidates, onSelect, onUpdate, loading }) {
                     <p className="text-slate-400 text-sm mt-2">Revisa los perfiles ingresados recientemente.</p>
                 </div>
                 
-                <div className="flex gap-3 w-full md:w-auto">
+                <div className="flex gap-3 w-full md:w-auto items-center">
                     <div className="relative group flex-1 md:w-64">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16}/>
                         <input 
                             type="text" 
                             placeholder="Buscar..." 
                             value={filter} 
                             onChange={(e) => setFilter(e.target.value)} 
-                            className="w-full pl-4 pr-4 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-sm text-slate-300 focus:border-blue-500 focus:outline-none transition-all placeholder-slate-600"
+                            className="w-full pl-10 pr-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-slate-300 focus:border-blue-500 focus:outline-none transition-all placeholder-slate-600"
                         />
                     </div>
-                    <button className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-lg text-sm font-medium transition-all shadow-lg shadow-blue-900/20 whitespace-nowrap">
-                        Agregar Candidato
+                    {/* BOTÓN ESTILIZADO CON ICONO */}
+                    <button 
+                        onClick={onAddClick}
+                        className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2.5 rounded-lg text-sm font-bold transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2 whitespace-nowrap active:scale-95"
+                    >
+                        <UserPlus size={22} />
+                        
                     </button>
-                    {/* Placeholder visual */}
-                    <div className="w-12 h-10 bg-slate-800 rounded-lg border border-slate-700 hidden md:block"></div>
                 </div>
             </div>
 
@@ -755,7 +815,8 @@ function ExploreView({ candidates, onSelect, onUpdate, loading }) {
                             <h3 className="text-lg font-bold text-white group-hover:text-blue-100 transition-colors mb-2">
                                 {c.nombre || "Sin Nombre"}
                             </h3>
-                            {isToday(c.fecha) && (
+                            {/* CAMBIO HÍBRIDO: Es Nuevo SOLO si es de HOY y NO se ha leído */}
+                            {isToday(c.fecha) && c.status_interno === 'new' && (
                                 <span className="inline-block px-2 py-0.5 bg-blue-600 text-white text-[10px] font-bold rounded shadow-sm animate-pulse">
                                     NUEVO
                                 </span>
@@ -775,10 +836,10 @@ function ExploreView({ candidates, onSelect, onUpdate, loading }) {
     );
 }
 
-        function ManageView({ candidates, onSelect, currentUser }) {
-        const stage2 = candidates.filter(c => c.stage === 'stage_2');
-        return (
-            <div className="h-full flex flex-col max-w-7xl mx-auto">
+function ManageView({ candidates, onSelect, currentUser }) {
+    const stage2 = candidates.filter(c => c.stage === 'stage_2');
+    return (
+        <div className="h-full flex flex-col max-w-7xl mx-auto">
             <div className="mb-6">
                 <h1 className="text-2xl font-bold text-white">Gestión de Candidatos</h1>
                 <p className="text-slate-400 text-sm mt-1">Etapa 2: Entrevistas y evaluación.</p>
@@ -814,7 +875,10 @@ function ExploreView({ candidates, onSelect, onUpdate, loading }) {
                                     {c.assignedTo ? (
                                         <div className="flex items-center gap-2">
                                             <Avatar name={c.assignedTo} size="sm"/>
-                                            <span className={`text-xs ${c.assignedTo === currentUser ? 'text-blue-400 font-medium' : 'text-slate-500'}`}>{c.assignedTo === currentUser ? 'Mío' : c.assignedTo}</span>
+                                            {/* Aquí se hace la comparación real con el usuario logueado */}
+                                            <span className={`text-xs ${c.assignedTo === currentUser ? 'text-blue-400 font-bold' : 'text-slate-500'}`}>
+    {c.assignedTo}
+</span>
                                         </div>
                                     ) : <span className="text-xs text-slate-600 italic">Sin asignar</span>}
                                 </td>
@@ -824,9 +888,302 @@ function ExploreView({ candidates, onSelect, onUpdate, loading }) {
                     </tbody>
                 </table>
             </div>
+        </div>
+    );
+}
+// ==========================================
+// 🗑️ VISTA PAPELERA (RECUPERACIÓN)
+// ==========================================
+function TrashView({ candidates, onUpdate }) {
+    // Filtramos solo los que están en 'trash'
+    const discarded = candidates.filter(c => c.stage === 'trash');
+
+    return (
+        <div className="h-full flex flex-col max-w-7xl mx-auto px-4">
+            <div className="mb-6">
+                <h1 className="text-2xl font-bold text-white flex items-center gap-3">
+                    <Trash2 className="text-rose-500" /> Papelera de Reciclaje
+                </h1>
+                <p className="text-slate-400 text-sm mt-1">
+                    Candidatos descartados. Puedes restaurarlos o ver el motivo de descarte.
+                </p>
             </div>
-        );
+
+            <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
+                <table className="w-full text-left border-collapse">
+                    <thead className="bg-slate-950/50 text-xs uppercase text-slate-500 font-bold tracking-wider">
+                        <tr>
+                            <th className="px-6 py-4 border-b border-slate-800">Candidato</th>
+                            <th className="px-6 py-4 border-b border-slate-800">Motivo de Descarte</th>
+                            <th className="px-6 py-4 border-b border-slate-800 text-right">Acción</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/50">
+                        {discarded.length === 0 ? (
+                            <tr>
+                                <td colSpan="3" className="p-8 text-center text-slate-500 italic">
+                                    La papelera está vacía.
+                                </td>
+                            </tr>
+                        ) : (
+                            discarded.map(c => (
+                                <tr key={c.id} className="hover:bg-slate-800/30 transition-colors group">
+                                    <td className="px-6 py-3">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center text-slate-500 font-bold text-xs">
+                                                {c.nombre.charAt(0)}
+                                            </div>
+                                            <div>
+                                                <span className="font-bold text-slate-300 text-sm block">{c.nombre}</span>
+                                                <span className="text-[10px] text-slate-500">{c.puesto}</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td className="px-6 py-3">
+                                        <span className="text-xs text-rose-300 bg-rose-900/10 px-2 py-1 rounded border border-rose-900/20">
+                                            {c.notes || c.motivo || "Sin motivo especificado"}
+                                        </span>
+                                    </td>
+                                    <td className="px-6 py-3 text-right">
+                                        <button 
+                                            onClick={() => {
+                                                if(confirm(`¿Restaurar a ${c.nombre} a la etapa de Exploración?`)) {
+                                                    onUpdate(c.id, { stage: 'stage_1', status_interno: 'viewed' });
+                                                }
+                                            }}
+                                            className="text-xs font-bold text-emerald-500 hover:text-emerald-400 border border-emerald-900/30 bg-emerald-900/10 px-3 py-1.5 rounded hover:bg-emerald-900/20 transition-all"
+                                        >
+                                            <Undo2 size={14} className="inline mr-1"/> RESTAURAR
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+// ==========================================
+// 📄 COMPONENTE: REPORTE PROFESIONAL (DISEÑO MEJORADO)
+// ==========================================
+const ProfessionalReport = ({ data, onBack, onEdit }) => {
+    const [downloading, setDownloading] = React.useState(false);
+
+    const handleDownload = async () => {
+        setDownloading(true);
+        try {
+            const response = await fetch(`${API_URL}/download-docx`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+
+            if (!response.ok) throw new Error("Error generando el documento");
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `Informe_${data.nombre.replace(/\s+/g, '_')}.docx`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } catch (error) {
+            console.error(error);
+            alert("No se pudo descargar el archivo. Revisa la consola.");
+        } finally {
+            setDownloading(false);
         }
+    };
+
+    const getLevelColor = (nivel) => {
+        const n = String(nivel).toLowerCase();
+        if (n.includes('avanzado') || n.includes('experto') || n.includes('alto') || n.includes('nativo')) return 'bg-slate-900 text-white border-slate-900';
+        if (n.includes('intermedio') || n.includes('medio') || n.includes('sólido')) return 'bg-slate-100 text-slate-800 border-slate-300';
+        return 'bg-white text-slate-500 border-slate-200';
+    };
+
+    return (
+        <div className="flex flex-col min-h-screen w-full bg-slate-900">
+            
+            {/* --- BARRA SUPERIOR FIJA --- */}
+            <div className="flex justify-between items-center px-8 py-4 bg-slate-800 border-b border-slate-700 shadow-md sticky top-0 z-50">
+                <div className="flex items-center gap-4">
+                    <button onClick={onBack} className="p-2 hover:bg-slate-700 rounded-full text-slate-400 hover:text-white transition-colors group">
+                        <ArrowRight className="rotate-180 group-hover:-translate-x-1 transition-transform" size={24} />
+                    </button>
+                    <div>
+                        <h1 className="text-lg font-bold text-white flex items-center gap-2">
+                            Vista Previa del Informe
+                            <span className="text-[10px] font-normal bg-blue-900/50 text-blue-300 px-2 py-0.5 rounded border border-blue-500/30">A4 PREVIEW</span>
+                        </h1>
+                        <p className="text-xs text-slate-400">Revisa el contenido antes de exportar a Word.</p>
+                    </div>
+                </div>
+                <div className="flex gap-3">
+                    <button onClick={onEdit} className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition-colors border border-slate-600 hover:border-slate-500">
+                        ✏️ Seguir Editando
+                    </button>
+                    <button 
+                        onClick={handleDownload} 
+                        disabled={downloading}
+                        className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold rounded-lg shadow-lg shadow-blue-900/20 flex items-center gap-2 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-wait"
+                    >
+                        {downloading ? <Loader2 className="animate-spin" size={18}/> : <Download size={18}/>}
+                        {downloading ? "Generando..." : "Descargar Word"}
+                    </button>
+                </div>
+            </div>
+
+            {/* --- CONTENEDOR PAPEL (SCROLLABLE) --- */}
+            <div className="flex-1 overflow-y-auto overflow-x-hidden py-8 px-4 bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900 flex justify-center">
+                
+                {/* HOJA A4 DIGITAL (TAMAÑO ESCALADO) */}
+                <div className="bg-white text-slate-900 w-full max-w-[850px] shadow-2xl mx-auto mb-8 flex flex-col rounded-lg overflow-hidden">
+                    
+                    {/* ENCABEZADO ELEGANTE */}
+                    <header className="px-10 sm:px-12 pt-10 sm:pt-12 pb-6 sm:pb-8 border-b-4 border-slate-900 mb-6 sm:mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 bg-slate-50">
+                        <div className="flex-1">
+                            <h1 className="text-3xl sm:text-4xl font-black text-slate-900 uppercase tracking-tighter leading-none mb-2">
+                                {data.nombre}
+                            </h1>
+                            <p className="text-base sm:text-lg text-slate-600 font-medium">{data.puesto}</p>
+                        </div>
+                        <div className="text-right">
+                            <span className="inline-block bg-slate-900 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest mb-2">
+                                Informe Confidencial
+                            </span>
+                            <p className="text-xs text-slate-400 font-medium whitespace-nowrap">
+                                {new Date().toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' })}
+                            </p>
+                        </div>
+                    </header>
+
+                    {/* CUERPO DEL DOCUMENTO */}
+                    <div className="px-10 sm:px-12 pb-10 sm:pb-12 space-y-6 sm:space-y-10 flex-1">
+
+                        {/* 1. RESUMEN EJECUTIVO */}
+                        <section>
+                            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
+                                <span className="w-4 h-0.5 bg-slate-400"></span> Resumen Ejecutivo
+                            </h3>
+                            <p className="text-sm leading-7 text-slate-800 text-justify font-normal whitespace-pre-line border-l-2 border-slate-200 pl-4">
+                                {data.resumen_ejecutivo || data.resumen_profesional || "Sin resumen disponible."}
+                            </p>
+                        </section>
+
+                        {/* 2. FICHA TÉCNICA (GRID LIMPIO) */}
+                        <section className="bg-slate-50 rounded-xl p-4 sm:p-6 border border-slate-100">
+                            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em] mb-4">Ficha Técnica</h3>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-4 sm:gap-y-6 gap-x-8 sm:gap-x-12">
+                                <div>
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Ubicación</span>
+                                    <span className="text-sm font-bold text-slate-900 block">{data.ficha_tecnica?.ubicacion || "-"}</span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Nivel de Inglés</span>
+                                    <span className="text-sm font-bold text-slate-900 block">{data.ficha_tecnica?.nivel_ingles || "-"}</span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Experiencia / Seniority</span>
+                                    <span className="text-sm font-bold text-slate-900 block">{data.ficha_tecnica?.nivel_experiencia || "-"}</span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Disponibilidad</span>
+                                    <span className="text-sm font-bold text-slate-900 block">{data.ficha_tecnica?.disponibilidad || "-"}</span>
+                                </div>
+                            </div>
+                        </section>
+
+                        {/* 3. COLUMNAS: TÉCNICAS Y BLANDAS */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-12">
+                            {/* Competencias Técnicas */}
+                            <div>
+                                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em] mb-4 border-b border-slate-200 pb-2">Competencias Técnicas</h3>
+                                <ul className="space-y-2 sm:space-y-3">
+                                    {(data.competencias_tecnicas || []).map((t, i) => (
+                                        <li key={i} className="flex justify-between items-center text-sm gap-2 flex-wrap sm:flex-nowrap group">
+                                            <span className="font-semibold text-slate-700">{t.competencia}</span>
+                                            <span className={`text-[9px] px-2 py-0.5 rounded border uppercase font-bold tracking-wider whitespace-nowrap ${getLevelColor(t.nivel)}`}>
+                                                {t.nivel}
+                                            </span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+
+                            {/* Habilidades Blandas */}
+                            <div>
+                                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em] mb-4 border-b border-slate-200 pb-2">Soft Skills</h3>
+                                <ul className="space-y-2 sm:space-y-3">
+                                    {(data.habilidades_blandas || []).map((h, i) => (
+                                        <li key={i} className="flex justify-between items-center text-sm gap-2 flex-wrap sm:flex-nowrap">
+                                            <span className="font-semibold text-slate-700">{h.habilidad}</span>
+                                            <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 uppercase whitespace-nowrap">
+                                                {h.nivel}
+                                            </span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        </div>
+
+                        {/* 4. HERRAMIENTAS (PILLS MEJORADOS) */}
+                        {(data.herramientas && data.herramientas.length > 0) && (
+                            <section>
+                                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em] mb-4">Stack Tecnológico</h3>
+                                <div className="flex flex-wrap gap-2">
+                                    {data.herramientas.map((t, i) => (
+                                        <div key={i} className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg shadow-sm text-xs flex items-center gap-2 whitespace-nowrap">
+                                            <span className="font-bold text-slate-700">{t.herramienta}</span>
+                                            <span className="w-px h-3 bg-slate-200"></span>
+                                            <span className="text-slate-400 font-medium text-[10px] uppercase">{t.nivel}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </section>
+                        )}
+
+                        {/* 5. PLUS / OBSERVACIONES */}
+                        <section className="bg-blue-50/50 p-4 sm:p-6 rounded-r-xl border-l-4 border-blue-600">
+                            <h3 className="text-[10px] font-bold text-blue-900 uppercase tracking-widest mb-2 flex items-center gap-2">
+                                <Sparkles size={12}/> Valor Agregado
+                            </h3>
+                            <p className="text-sm text-blue-900 italic leading-relaxed">
+                                "{data.plus || "Sin observaciones adicionales."}"
+                            </p>
+                        </section>
+
+                        {/* 6. CONCLUSIÓN FINAL */}
+                        <section className="pt-4">
+                            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-[0.2em] mb-3">Recomendación Final</h3>
+                            <p className="text-sm text-slate-800 leading-relaxed text-justify font-medium">
+                                {data.recomendacion_final || data.conclusion_final}
+                            </p>
+                        </section>
+
+                    </div>
+
+                    {/* PIE DE PÁGINA */}
+                    <footer className="mt-auto px-10 sm:px-12 py-6 sm:py-8 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                        <div className="flex items-center gap-2 opacity-50">
+                            <div className="w-6 h-6 bg-slate-900 rounded-full"></div>
+                            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Global Talent Connections</span>
+                        </div>
+                        <div className="text-left sm:text-right">
+                            <p className="text-sm font-bold text-slate-900">{data.responsable}</p>
+                            <p className="text-[9px] text-slate-400 uppercase tracking-widest">Talent Acquisition Specialist</p>
+                        </div>
+                    </footer>
+
+                </div>
+            </div>
+        </div>
+    );
+};
 
 // =========================================================
 // ⚡ VISTA REPORTE (CON AUTOGUARDADO ANTI-DESASTRES)
@@ -1307,394 +1664,486 @@ function ReportView({ candidates, onUpdate, setCurrentReport }) {
         </div>
     );
 }
-// --- VISTA DETALLE MEJORADA (CV Editable + Selector de Responsable) ---
-function CandidateDetail({ candidate, onBack, onUpdate }) {
-            const [noteInput, setNoteInput] = useState(candidate.notes || "");
+// --- VISTA DETALLE MEJORADA (CON MODAL DE DESCARTE) ---
+function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
+    const [noteInput, setNoteInput] = useState(candidate.notes || "");
+    const [isEditing, setIsEditing] = useState(false);
+    const [newCvLink, setNewCvLink] = useState(candidate.cv_url || "");
+    const [newVideoLink, setNewVideoLink] = useState(candidate.video_url || "");
+    const [activeSubTab, setActiveSubTab] = useState('gestion');
+    const [showManualModal, setShowManualModal] = useState(false);
+
+    // ESTADOS PARA EL MODAL DE DESCARTE
+    const [showDiscardModal, setShowDiscardModal] = useState(false);
+    const [discardReason, setDiscardReason] = useState("");
+
+    // Recuperar alertas y skills
+    const flags = candidate.ia_alertas || candidate.alerts || [];
+    const hardSkills = candidate.respuestas_filtro?.herramientas 
+        ? (Array.isArray(candidate.respuestas_filtro.herramientas) 
+            ? candidate.respuestas_filtro.herramientas 
+            : candidate.respuestas_filtro.herramientas.split(',').map(s => s.trim()))
+        : ['Sin datos técnicos'];
+
+    const saveLinks = () => {
+        onUpdate(candidate.id, { cv_url: newCvLink, video_url: newVideoLink });
+        setIsEditing(false);
+    };
+
+    const handleApprove = () => {
+        onUpdate(candidate.id, { 
+            stage: 'stage_2', 
+            status_interno: 'interview_pending',
+            assignedTo: currentUser 
+        });
+    };
+
+    // FUNCIÓN PARA CONFIRMAR EL DESCARTE
+    const confirmDiscard = () => {
+        if (!discardReason.trim()) return alert("Por favor escribe un motivo.");
+        
+        onUpdate(candidate.id, { 
+            stage: 'trash', 
+            motivo: discardReason, // Guardamos el motivo
+            notes: discardReason   // También en notas para redundancia
+        });
+        setShowDiscardModal(false);
+    };
+
+    return (
+        <div className="flex flex-col h-full animate-in slide-in-from-right duration-300 pb-10 max-w-7xl mx-auto px-4 relative">
             
-            // 1. ESTADO PARA EDICIÓN DE LINKS (AHORA SON DOS: CV Y VIDEO)
-            const [isEditing, setIsEditing] = useState(false);
-            const [newCvLink, setNewCvLink] = useState(candidate.cv_url || "");
-            const [newVideoLink, setNewVideoLink] = useState(candidate.video_url || ""); // <--- NUEVO
-
-            // 2. ESTADO PARA RESPONSABLE (Selector local simple)
-            const [responsable, setResponsable] = useState(candidate.assignedTo || "Admin");
-            const team = ["Viviana", "Gladymar", "Sandra", "Informes", "Admin"];
-
-            // Recuperar alertas del backend
-            const flags = candidate.ia_alertas || candidate.alerts || [];
-            
-            // Recuperar Skills
-            const hardSkills = candidate.respuestas_filtro?.herramientas 
-                ? candidate.respuestas_filtro.herramientas.split(',').map(s => s.trim()) 
-                : ['Sin datos técnicos'];
-
-            // Función para guardar LOS LINKS (CV y Video)
-            const saveLinks = () => {
-                onUpdate(candidate.id, { 
-                    cv_url: newCvLink,
-                    video_url: newVideoLink // <--- SE GUARDA EL VIDEO TAMBIÉN
-                });
-                setIsEditing(false);
-            };
-
-            // Función para Aprobar asignando responsable
-            const handleApprove = () => {
-                onUpdate(candidate.id, { 
-                    stage: 'stage_2', 
-                    status_interno: 'interview_pending',
-                    assignedTo: responsable // <--- AQUÍ SE GUARDA QUIÉN LO APROBÓ
-                });
-            };
-
-            return (
-                <div className="flex flex-col h-full animate-in slide-in-from-right duration-300 pb-10 max-w-7xl mx-auto px-4">
-                    {/* HEADER */}
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
-                        <div className="flex items-center gap-4">
-                            <button onClick={onBack} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors">
-                                <ArrowRight className="rotate-180" size={24} />
-                            </button>
-                            <div>
-                                <h1 className="text-2xl font-bold text-white flex items-center gap-3">
-                                    {candidate.nombre}
-                                    {/* Etiqueta de Responsable si ya tiene */}
-                                    {candidate.assignedTo && <span className="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded border border-purple-500/30 uppercase">Resp: {candidate.assignedTo}</span>}
-                                </h1>
-                                <p className="text-sm text-slate-400">{candidate.puesto}</p>
-                            </div>
+            {/* --- MODAL DE DESCARTE (POPUP) --- */}
+            {showDiscardModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                    <div className="bg-slate-900 border border-rose-900/50 rounded-2xl p-6 max-w-md w-full shadow-2xl relative">
+                        <button onClick={() => setShowDiscardModal(false)} className="absolute top-4 right-4 text-slate-500 hover:text-white">✕</button>
+                        
+                        <div className="flex items-center gap-3 mb-4 text-rose-500">
+                            <Trash2 size={24} />
+                            <h3 className="text-xl font-bold text-white">Descartar Candidato</h3>
                         </div>
                         
-                        {/* BOTONERA DE ACCIÓN CON SELECTOR DE USUARIO */}
-                        <div className="flex items-center gap-3 bg-slate-900 p-2 rounded-xl border border-slate-800">
-                            {/* Selector de Usuario para Aprobar */}
-                            <div className="flex flex-col px-2">
-                                <label className="text-[9px] text-slate-500 uppercase font-bold">Soy:</label>
-                                <select 
-                                    value={responsable} 
-                                    onChange={(e) => setResponsable(e.target.value)}
-                                    className="bg-transparent text-white text-xs font-bold outline-none cursor-pointer hover:text-blue-400"
-                                >
-                                    {team.map(u => <option key={u} value={u} className="bg-slate-900">{u}</option>)}
-                                </select>
-                            </div>
-                            <div className="h-8 w-px bg-slate-700 mx-1"></div>
-                            
-                            <button onClick={() => onUpdate(candidate.id, { stage: 'trash' })} className="px-4 py-2 rounded-lg border border-rose-900/50 text-rose-400 hover:bg-rose-900/20 text-sm font-medium transition-colors">
-                                Descartar
-                            </button>
-                            <button onClick={handleApprove} className="px-6 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition-colors shadow-lg shadow-emerald-900/20">
-                                Aprobar ({responsable})
+                        <p className="text-slate-400 text-sm mb-4">
+                            Estás a punto de mover a <strong className="text-white">{candidate.nombre}</strong> a la papelera. 
+                            Por favor, indica el motivo para futuras referencias.
+                        </p>
+
+                        <label className="text-[10px] font-bold text-slate-500 uppercase mb-2 block">Motivo del descarte</label>
+                        <textarea 
+                            className="w-full h-24 bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-white focus:border-rose-500 focus:outline-none resize-none mb-6"
+                            placeholder="Ej: Salario fuera de rango, no tiene inglés..."
+                            value={discardReason}
+                            onChange={(e) => setDiscardReason(e.target.value)}
+                            autoFocus
+                        ></textarea>
+
+                        <div className="flex justify-end gap-3">
+                            <button onClick={() => setShowDiscardModal(false)} className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-white">Cancelar</button>
+                            <button onClick={confirmDiscard} className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-sm font-bold rounded-lg shadow-lg shadow-rose-900/20">
+                                Confirmar Descarte
                             </button>
                         </div>
                     </div>
+                </div>
+            )}
 
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                        
-                        {/* COLUMNA IZQUIERDA */}
-                        <div className="lg:col-span-4 space-y-6">
-                            {/* SCORE CARD */}
-                            <Card className="p-6 bg-slate-900 border-slate-800">
-                                <div className="flex justify-between items-center mb-4">
-                                    <span className="text-sm font-bold text-slate-400 uppercase tracking-wider">IA Match</span>
-                                    <div className={`px-3 py-1 rounded-full border ${
-                                        (candidate.ia_score || 0) >= 70 
-                                        ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
-                                        : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
-                                    }`}>
-                                        <span className="text-3xl font-bold">{candidate.ia_score || 0}</span>
-                                        <span className="text-xs opacity-70">/100</span>
+            {/* --- HEADER COMPARTIDO --- */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                <div className="flex items-center gap-4">
+                    <button onClick={onBack} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors">
+                        <ArrowRight className="rotate-180" size={24} />
+                    </button>
+                    <div>
+                        <h1 className="text-2xl font-bold text-white flex items-center gap-3">
+                            {candidate.nombre}
+                            {candidate.assignedTo && (
+                                <span className="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded border border-purple-500/30 uppercase">
+                                    Resp: {candidate.assignedTo}
+                                </span>
+                            )}
+                        </h1>
+                        <p className="text-sm text-slate-400">{candidate.puesto}</p>
+                    </div>
+                </div>
+
+                <div className="flex flex-col md:flex-row gap-4 md:items-center">
+                    {/* SWITCH DE PESTAÑAS */}
+                    <div className="bg-slate-900 p-1 rounded-lg border border-slate-800 flex self-start">
+                        <button 
+                            onClick={() => setActiveSubTab('gestion')}
+                            className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${activeSubTab === 'gestion' ? 'bg-slate-800 text-white shadow-sm border border-slate-700' : 'text-slate-500 hover:text-slate-300'}`}
+                        >
+                            Gestión
+                        </button>
+                        <button 
+                            onClick={() => setActiveSubTab('history')}
+                            className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${activeSubTab === 'history' ? 'bg-slate-800 text-white shadow-sm border border-slate-700' : 'text-slate-500 hover:text-slate-300'}`}
+                        >
+                            Cronología
+                        </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        {/* BOTÓN DESCARTAR CONECTADO AL MODAL */}
+                        <button onClick={() => setShowDiscardModal(true)} 
+                                className="px-4 py-2 rounded-lg border border-rose-900/50 text-rose-400 hover:bg-rose-900/20 text-sm font-medium transition-colors">
+                            Descartar
+                        </button>
+                        <button onClick={handleApprove} 
+                                className="px-6 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold transition-all shadow-lg active:scale-95">
+                            Aprobar
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* --- CUERPO PRINCIPAL --- */}
+            {activeSubTab === 'gestion' ? (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-300">
+                    {/* COLUMNA IZQUIERDA */}
+                    <div className="lg:col-span-4 space-y-6">
+                        <Card className="p-6 bg-slate-900 border-slate-800">
+                            <div className="flex justify-between items-center mb-4">
+                                <span className="text-sm font-bold text-slate-400 uppercase tracking-wider">IA Match</span>
+                                <div className={`px-3 py-1 rounded-full border ${ (candidate.ia_score || 0) >= 70 ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400' }`}>
+                                    <span className="text-3xl font-bold">{candidate.ia_score || 0}</span>
+                                    <span className="text-xs opacity-70">/100</span>
+                                </div>
+                            </div>
+                            <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full ${ (candidate.ia_score || 0) >= 70 ? 'bg-emerald-500' : 'bg-rose-500' }`} style={{ width: `${candidate.ia_score || 5}%` }}></div>
+                            </div>
+                            {flags.length > 0 && (
+                                <div className="mt-6 pt-4 border-t border-slate-800">
+                                    <p className="text-[10px] font-bold text-rose-500 uppercase mb-2 flex items-center gap-1"><AlertTriangle size={12}/> Alertas</p>
+                                    <div className="flex flex-wrap gap-2">
+                                        {flags.map((flag, i) => <span key={i} className="px-2 py-1 bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[10px] font-bold rounded uppercase">{flag}</span>)}
                                     </div>
                                 </div>
-                                <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
-                                    <div className={`h-full rounded-full ${ (candidate.ia_score || 0) >= 70 ? 'bg-emerald-500' : 'bg-rose-500' }`} style={{ width: `${candidate.ia_score || 5}%` }}></div>
-                                </div>
-                                
-                                {flags.length > 0 && (
-                                    <div className="mt-6 pt-4 border-t border-slate-800">
-                                        <p className="text-[10px] font-bold text-rose-500 uppercase mb-2 flex items-center gap-1"><AlertTriangle size={12}/> Alertas</p>
-                                        <div className="flex flex-wrap gap-2">
-                                            {flags.map((flag, i) => <span key={i} className="px-2 py-1 bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[10px] font-bold rounded uppercase">{flag}</span>)}
+                            )}
+                        </Card>
+
+                        <Card className="p-6 bg-slate-900 border-slate-800">
+                            <div className="flex justify-between items-center mb-4">
+                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Material</h3>
+                                <button onClick={() => setIsEditing(!isEditing)} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
+                                    {isEditing ? '✕ Cancelar' : '✏️ Editar Links'}
+                                </button>
+                            </div>
+                            <div className="space-y-3">
+                                {isEditing && (
+                                    <div className="p-3 bg-slate-950 rounded-lg border border-blue-500/30 mb-2 animate-in fade-in space-y-3">
+                                        <div>
+                                            <label className="text-[10px] text-blue-400 font-bold uppercase mb-1 block">Link CV (PDF):</label>
+                                            <input type="text" value={newCvLink} onChange={(e) => setNewCvLink(e.target.value)} placeholder="https://..." className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white outline-none focus:border-blue-500" />
                                         </div>
+                                        <div>
+                                            <label className="text-[10px] text-purple-400 font-bold uppercase mb-1 block">Link Video:</label>
+                                            <input type="text" value={newVideoLink} onChange={(e) => setNewVideoLink(e.target.value)} placeholder="https://..." className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white outline-none focus:border-purple-500" />
+                                        </div>
+                                        <button onClick={saveLinks} className="w-full bg-emerald-600 text-white py-1.5 rounded text-xs font-bold hover:bg-emerald-500">💾 GUARDAR CAMBIOS</button>
                                     </div>
                                 )}
-                            </Card>
+                                <a href={candidate.cv_url} target="_blank" className="flex items-center gap-4 p-4 rounded-xl border border-slate-800 bg-slate-950 hover:border-blue-500/50 hover:bg-slate-900 transition-all group cursor-pointer">
+                                    <div className="w-10 h-10 rounded-full bg-blue-600/20 flex items-center justify-center text-blue-500 group-hover:scale-110 transition-transform"><FileText size={20}/></div>
+                                    <div><h4 className="text-sm font-bold text-white">Curriculum Vitae</h4><p className="text-xs text-blue-400 group-hover:underline">{candidate.cv_url && candidate.cv_url.length > 5 ? "Ver Documento" : "Link no disponible"}</p></div>
+                                </a>
+                                <a href={candidate.video_url || "#"} target="_blank" className={`flex items-center gap-4 p-4 rounded-xl border border-slate-800 bg-slate-950 transition-all group ${!candidate.video_url ? 'opacity-50 cursor-not-allowed' : 'hover:border-purple-500/50 hover:bg-slate-900 cursor-pointer'}`}>
+                                    <div className="w-10 h-10 rounded-full bg-purple-600/20 flex items-center justify-center text-purple-500 group-hover:scale-110 transition-transform"><Video size={20}/></div>
+                                    <div><h4 className="text-sm font-bold text-white">Video Presentación</h4><p className="text-xs text-purple-400 group-hover:underline">{candidate.video_url ? 'Abrir Link Externo' : 'No disponible'}</p></div>
+                                </a>
+                            </div>
+                        </Card>
+                    </div>
 
-                            {/* MATERIALES CARD (AQUÍ ESTÁ LA MAGIA DEL LINK) */}
-                            <Card className="p-6 bg-slate-900 border-slate-800">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Material</h3>
-                                    {/* Botón Lápiz para Editar */}
-                                    <button onClick={() => setIsEditing(!isEditing)} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
-                                        {isEditing ? '✕ Cancelar' : '✏️ Editar Links'}
-                                    </button>
+                    {/* COLUMNA DERECHA */}
+                    <div className="lg:col-span-8 space-y-6">
+                        <Card className="p-8 bg-slate-900 border-slate-800 relative overflow-hidden">
+                            <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
+                            <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2 relative z-10"><Sparkles className="text-blue-400" size={20} /> Análisis del Perfil</h2>
+                            <div className="bg-slate-950/50 rounded-xl p-6 border border-slate-800 mb-6 relative z-10">
+                                <p className="text-sm text-slate-300 leading-relaxed">{candidate.ia_motivos || candidate.motivo || "Análisis pendiente..."}</p>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 relative z-10">
+                                <div>
+                                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4 border-b border-slate-800 pb-2">Datos Clave</h3>
+                                    <ul className="space-y-3">
+                                        <li className="flex justify-between text-xs"><span className="text-slate-400">Salario:</span><span className={candidate.respuestas_filtro?.salario === 'Sí' ? "text-emerald-400" : "text-white"}>{candidate.respuestas_filtro?.salario || "N/A"}</span></li>
+                                        <li className="flex justify-between text-xs"><span className="text-slate-400">Monitoreo:</span><span className={candidate.respuestas_filtro?.monitoreo === 'Sí' ? "text-emerald-400" : "text-white"}>{candidate.respuestas_filtro?.monitoreo || "N/A"}</span></li>
+                                        <li className="flex justify-between text-xs"><span className="text-slate-400">Disponibilidad:</span><span className="text-white">{candidate.respuestas_filtro?.disponibilidad || "N/A"}</span></li>
+                                    </ul>
                                 </div>
-
-                                <div className="space-y-3">
-                                    {/* EDITOR DE LINK (AHORA MUESTRA AMBOS) */}
-                                    {isEditing && (
-                                        <div className="p-3 bg-slate-950 rounded-lg border border-blue-500/30 mb-2 animate-in fade-in space-y-3">
-                                            
-                                            {/* INPUT CV */}
-                                            <div>
-                                                <label className="text-[10px] text-blue-400 font-bold uppercase mb-1 block">Link CV (PDF):</label>
-                                                <input 
-                                                    type="text" 
-                                                    value={newCvLink}
-                                                    onChange={(e) => setNewCvLink(e.target.value)}
-                                                    placeholder="https://drive.google.com/..."
-                                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white outline-none focus:border-blue-500"
-                                                />
-                                            </div>
-
-                                            {/* INPUT VIDEO (NUEVO) */}
-                                            <div>
-                                                <label className="text-[10px] text-purple-400 font-bold uppercase mb-1 block">Link Video:</label>
-                                                <input 
-                                                    type="text" 
-                                                    value={newVideoLink}
-                                                    onChange={(e) => setNewVideoLink(e.target.value)}
-                                                    placeholder="https://loom.com/..."
-                                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white outline-none focus:border-purple-500"
-                                                />
-                                            </div>
-
-                                            <button onClick={saveLinks} className="w-full bg-emerald-600 text-white py-1.5 rounded text-xs font-bold hover:bg-emerald-500">
-                                                💾 GUARDAR CAMBIOS
-                                            </button>
-                                        </div>
-                                    )}
-
-                                    {/* BOTÓN CV */}
-                                    <a href={candidate.cv_url} target="_blank" className="flex items-center gap-4 p-4 rounded-xl border border-slate-800 bg-slate-950 hover:border-blue-500/50 hover:bg-slate-900 transition-all group cursor-pointer">
-                                        <div className="w-10 h-10 rounded-full bg-blue-600/20 flex items-center justify-center text-blue-500 group-hover:scale-110 transition-transform"><FileText size={20}/></div>
-                                        <div>
-                                            <h4 className="text-sm font-bold text-white">Curriculum Vitae</h4>
-                                            <p className="text-xs text-blue-400 group-hover:underline">
-                                                {candidate.cv_url && candidate.cv_url.length > 5 ? "Ver Documento" : "Link no disponible"}
-                                            </p>
-                                        </div>
-                                    </a>
-
-                                    {/* BOTÓN VIDEO */}
-                                    <a href={candidate.video_url || "#"} target="_blank" className={`flex items-center gap-4 p-4 rounded-xl border border-slate-800 bg-slate-950 transition-all group ${!candidate.video_url ? 'opacity-50 cursor-not-allowed' : 'hover:border-purple-500/50 hover:bg-slate-900 cursor-pointer'}`}>
-                                        <div className="w-10 h-10 rounded-full bg-purple-600/20 flex items-center justify-center text-purple-500 group-hover:scale-110 transition-transform"><Video size={20}/></div>
-                                        <div>
-                                            <h4 className="text-sm font-bold text-white">Video Presentación</h4>
-                                            <p className="text-xs text-purple-400 group-hover:underline">{candidate.video_url ? 'Abrir Link Externo' : 'No disponible'}</p>
-                                        </div>
-                                    </a>
-                                </div>
-                            </Card>
-                        </div>
-
-                        {/* COLUMNA DERECHA */}
-                        <div className="lg:col-span-8 space-y-6">
-                            <Card className="p-8 bg-slate-900 border-slate-800 relative overflow-hidden">
-                                <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
-                                <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2 relative z-10"><Sparkles className="text-blue-400" size={20} /> Análisis del Perfil</h2>
-                                <div className="bg-slate-950/50 rounded-xl p-6 border border-slate-800 mb-6 relative z-10">
-                                    <p className="text-sm text-slate-300 leading-relaxed">{candidate.ia_motivos || candidate.motivo || "Análisis pendiente..."}</p>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 relative z-10">
-                                    <div>
-                                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4 border-b border-slate-800 pb-2">Datos Clave</h3>
-                                        <ul className="space-y-3">
-                                            <li className="flex justify-between text-xs"><span className="text-slate-400">Salario:</span><span className={candidate.respuestas_filtro?.salario === 'Sí' ? "text-emerald-400" : "text-white"}>{candidate.respuestas_filtro?.salario || "N/A"}</span></li>
-                                            <li className="flex justify-between text-xs"><span className="text-slate-400">Monitoreo:</span><span className={candidate.respuestas_filtro?.monitoreo === 'Sí' ? "text-emerald-400" : "text-white"}>{candidate.respuestas_filtro?.monitoreo || "N/A"}</span></li>
-                                            <li className="flex justify-between text-xs"><span className="text-slate-400">Disponibilidad:</span><span className="text-white">{candidate.respuestas_filtro?.disponibilidad || "N/A"}</span></li>
-                                        </ul>
-                                    </div>
-                                    <div>
-                                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4 border-b border-slate-800 pb-2">Skills</h3>
-                                        <div className="flex flex-wrap gap-2">
-                                            {hardSkills.map((skill, i) => <span key={i} className="px-3 py-1 bg-slate-800 text-slate-300 text-[11px] rounded border border-slate-700">{skill}</span>)}
-                                        </div>
+                                <div>
+                                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4 border-b border-slate-800 pb-2">Skills</h3>
+                                    <div className="flex flex-wrap gap-2">
+                                        {hardSkills.map((skill, i) => <span key={i} className="px-3 py-1 bg-slate-800 text-slate-300 text-[11px] rounded border border-slate-700">{skill}</span>)}
                                     </div>
                                 </div>
-                            </Card>
-
-                            <Card className="bg-slate-900 border-slate-800 flex flex-col overflow-hidden">
-                                <div className="p-4 border-b border-slate-800 bg-slate-950/30"><h3 className="text-sm font-bold text-white">Tus Notas Personales</h3></div>
-                                <textarea className="w-full h-32 bg-slate-900 p-4 text-slate-300 focus:outline-none placeholder-slate-600 resize-none text-sm" placeholder="Escribe aquí..." value={noteInput} onChange={(e) => setNoteInput(e.target.value)} onBlur={() => onUpdate(candidate.id, { notes: noteInput })}></textarea>
-                            </Card>
-                        </div>
+                            </div>
+                        </Card>
+                        <Card className="bg-slate-900 border-slate-800 flex flex-col overflow-hidden">
+                            <div className="p-4 border-b border-slate-800 bg-slate-950/30"><h3 className="text-sm font-bold text-white">Tus Notas Personales</h3></div>
+                            <textarea className="w-full h-32 bg-slate-900 p-4 text-slate-300 focus:outline-none placeholder-slate-600 resize-none text-sm" placeholder="Escribe aquí..." value={noteInput} onChange={(e) => setNoteInput(e.target.value)} onBlur={() => onUpdate(candidate.id, { notes: noteInput })}></textarea>
+                        </Card>
                     </div>
                 </div>
-            );
-        }
-// --- APP CONTAINER ---
-function App() {
-            const [activeTab, setActiveTab] = useState('dashboard');
-            const [currentReport, setCurrentReport] = useState(null);
-            const [selectedCandidateId, setSelectedCandidateId] = useState(null);
-            const [candidates, setCandidates] = useState([]);
-            const [loading, setLoading] = useState(false);
-            const [init, setInit] = useState(false);
-
-            const LOGO_URL = "./GLOBAL.jpg";
-            const CURRENT_USER = "Admin"; 
-
-            const cargarDatos = async (forceRefresh = false) => {
-    // Si ya cargó y no forzamos, no hacemos nada
-    if (init && !forceRefresh) return;
+            ) : (
+                <div className="animate-in fade-in slide-in-from-bottom-4 duration-300 max-w-3xl mx-auto mt-6">
+                    <Card className="bg-slate-900 border-slate-800 p-8">
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-6 flex items-center gap-2">
+                            <History size={16}/> Historial de Movimientos
+                        </h3>
+                        
+                        {!candidate.history || candidate.history.length === 0 ? (
+                            <div className="text-center py-10 border-2 border-dashed border-slate-800 rounded-xl">
+                                <p className="text-slate-500 text-sm">No hay movimientos registrados aún.</p>
+                            </div>
+                        ) : (
+                            <div className="relative border-l-2 border-slate-800 ml-3 space-y-8 pl-8 py-2">
+                                {candidate.history.map((h, idx) => (
+                                    <div key={idx} className="relative group">
+                                        <div className="absolute -left-[39px] top-1 w-5 h-5 rounded-full bg-slate-900 border-2 border-blue-500 z-10 group-hover:scale-125 transition-transform shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div>
+                                        <div className="flex flex-col gap-1">
+                                            <span className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">
+                                                {h.date ? new Date(h.date).toLocaleString('es-AR') : 'Fecha desconocida'}
+                                            </span>
+                                            <h4 className="text-white font-bold text-sm">{h.event || 'Evento del sistema'}</h4>
+                                            <p className="text-xs text-slate-400 bg-slate-950/50 p-2 rounded border border-slate-800 inline-block mt-1">
+                                                {h.detail || 'Sin detalles adicionales.'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </Card>
+                </div>
+            )}
+        </div>
+    );
+}
+// --- COMPONENTE LOGIN (PORTERÍA DE ACCESO) ---
+const LoginView = ({ onLogin }) => {
+    const team = [
+        { name: "Gladymar", role: "Recursos Humanos" },
+        { name: "Sandra", role: "Recursos Humanos" },
+        { name: "Viviana", role: "Recursos Humanos" },
+        { name: "Pilar", role: "Ventas / Closer" },
+        { name: "Norma", role: "Control de Calidad" },
+        { name: "Daniel (CEO)", role: "Dirección" },
+        { name: "Admin", role: "Superusuario" }
+    ];
     
-    setLoading(true);
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-950 relative overflow-hidden">
+            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 pointer-events-none"></div>
+            <div className="relative z-10 w-full max-w-md p-8 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl animate-in fade-in zoom-in duration-300">
+                <div className="text-center mb-8">
+                    <h1 className="text-3xl font-bold text-white mb-2 tracking-tight">Global Talent</h1>
+                    <p className="text-slate-400 text-sm italic">"Conectando talento, automáticamente"</p>
+                </div>
 
-    // Configuración de la memoria (Caché)
-    const CACHE_KEY = 'global_talent_cache_v1';
-    const CACHE_TIME_KEY = 'global_talent_time';
-    const VALIDEZ_MINUTOS = 15; // ⏳ Guarda los datos 15 minutos
-
-    try {
-        const now = new Date().getTime();
-        const cachedRaw = localStorage.getItem(CACHE_KEY);
-        const cachedTime = localStorage.getItem(CACHE_TIME_KEY);
-
-        // 1. ESTRATEGIA DE AHORRO: Chequear si tenemos datos guardados recientes
-        if (!forceRefresh && cachedRaw && cachedTime) {
-            const edadMinutos = (now - parseInt(cachedTime)) / (1000 * 60);
-            
-            if (edadMinutos < VALIDEZ_MINUTOS) {
-                console.log(`⚡ Usando memoria local (Ahorro Firebase activo). Edad: ${edadMinutos.toFixed(1)} min`);
-                setCandidates(JSON.parse(cachedRaw));
-                setInit(true);
-                setLoading(false);
-                return; // 🛑 ¡FRENAMOS ACÁ! No tocamos Firebase.
-            }
-        }
-
-        // 2. SOLO SI ES NECESARIO: Vamos a Firebase
-        console.log("📡 Datos viejos o inexistentes. Gastando lectura en Firebase...");
-        const data = await api.candidates.list();
-
-        // Guardamos lo nuevo en el bolsillo para la próxima
-        localStorage.setItem(CACHE_KEY, JSON.stringify(data));
-        localStorage.setItem(CACHE_TIME_KEY, now.toString());
-
-        setCandidates(data);
-        setInit(true);
-
-    } catch (error) {
-        console.error("❌ Error cargando datos:", error);
-    } finally {
-        setLoading(false);
-    }
+                <div className="space-y-3">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] text-center mb-4">Seleccioná tu perfil de acceso</p>
+                    {team.map(user => (
+                        <button 
+                            key={user.name}
+                            onClick={() => onLogin(user.name)}
+                            className="w-full p-4 rounded-xl bg-slate-800 hover:bg-blue-600 border border-slate-700 hover:border-blue-500 transition-all group flex items-center justify-between"
+                        >
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full bg-slate-700 group-hover:bg-white/20 flex items-center justify-center text-white font-bold text-sm shadow-inner">
+                                    {user.name.charAt(0)}
+                                </div>
+                                <div className="text-left">
+                                    <p className="font-bold text-slate-200 group-hover:text-white leading-none">{user.name}</p>
+                                    <p className="text-[10px] text-slate-500 group-hover:text-blue-100 uppercase mt-1.5 font-medium tracking-wider">{user.role}</p>
+                                </div>
+                            </div>
+                            <LucideIcon name="ChevronRight" size={16} className="text-slate-600 group-hover:text-white transition-transform group-hover:translate-x-1" />
+                        </button>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
 };
 
-            useEffect(() => { 
-                cargarDatos(); 
-            }, []);
+// --- APP CONTAINER ---
+function App() {
+    // 1. ESTADOS (HOOKS) - Siempre arriba de todo
+    const [activeTab, setActiveTab] = useState('dashboard');
+    const [currentReport, setCurrentReport] = useState(null);
+    const [selectedCandidateId, setSelectedCandidateId] = useState(null);
+    const [candidates, setCandidates] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [init, setInit] = useState(false);
+    const [currentUser, setCurrentUser] = useState(null);
+    const [showManualModal, setShowManualModal] = useState(false); 
 
-            const handleUpdateCandidate = async (id, updates) => {
-                let finalUpdates = { ...updates };
-                
-                if (updates.stage === 'stage_2') {
-                    finalUpdates.assignedTo = CURRENT_USER; 
-                    finalUpdates.status_interno = 'interview_pending';
-                }
+    const LOGO_URL = "./GLOBAL.jpg";
 
-                if (updates.stage === 'trash' || updates.stage === 'stage_3') {
-                    setSelectedCandidateId(null);
-                }
+    // 2. FUNCIÓN DE CARGA
+    const cargarDatos = async (forceRefresh = false) => {
+        if (init && !forceRefresh) return;
+        setLoading(true);
+        try {
+            const data = await api.candidates.list();
+            setCandidates(data);
+            setInit(true);
+        } catch (error) {
+            console.error("❌ Error cargando datos:", error);
+        } finally {
+            setLoading(false);
+        }
+    };
 
-                setCandidates(prev => prev.map(c => {
-                    if (c.id === id) {
-                        if (activeTab === 'stage_1' && c.status_interno === 'new' && !updates.stage) {
-                            finalUpdates.status_interno = 'viewed';
-                        }
-                        return { ...c, ...finalUpdates };
-                    }
-                    return c;
-                }));
+    // 3. EFECTOS
+    useEffect(() => { 
+        if (currentUser) cargarDatos(); 
+    }, [currentUser]);
 
-                await api.candidates.update(id, finalUpdates);
-            };
+    // 4. LA PORTERÍA (Ubicado después de los hooks para evitar crashes)
+    if (!currentUser) {
+        return <LoginView onLogin={(name) => setCurrentUser(name)} />;
+    }
 
-            const handleSelectCandidate = (id) => {
-                setSelectedCandidateId(id);
-                handleUpdateCandidate(id, {});
-            };
+// 5. LÓGICA DE ACTUALIZACIÓN (CORREGIDA)
+const handleUpdateCandidate = async (id, updates) => {
+        // 1. Preparamos la copia base de los cambios
+        let finalUpdates = { ...updates };
+        
+        // 2. Buscamos al candidato ACTUAL para ver su estado hoy
+        const currentCandidate = candidates.find(c => c.id === id);
 
-            const renderContent = () => {
-                if (currentReport) {
-                    return <ProfessionalReport data={currentReport} onBack={() => setCurrentReport(null)} />;
-                }
+        // 3. Lógica de Negocio: Asignaciones automáticas
+        if (updates.stage === 'stage_2') {
+            finalUpdates.assignedTo = currentUser; 
+            finalUpdates.status_interno = 'interview_pending';
+        }
 
-                if (selectedCandidateId) {
-                    const cand = candidates.find(c => c.id === selectedCandidateId);
-                    if (!cand) {
-                        setSelectedCandidateId(null);
-                        return null;
-                    }
-                    return (
-                        <CandidateDetail 
-                            key={cand.id} 
-                            candidate={cand} 
-                            onBack={() => setSelectedCandidateId(null)} 
-                            onUpdate={handleUpdateCandidate} 
-                            loading={loading}
-                            currentUser={CURRENT_USER}
-                        />
-                    );
-                }
+        if (updates.stage === 'trash' || updates.stage === 'stage_3') {
+            setSelectedCandidateId(null);
+        }
 
-                switch (activeTab) {
-                    case 'dashboard': return <DashboardView candidates={candidates} onNavigate={setActiveTab} />;
-                    case 'stage_1':   return <ExploreView candidates={candidates} onSelect={handleSelectCandidate} onUpdate={handleUpdateCandidate} loading={loading} />;
-                    case 'stage_2':   return <ManageView candidates={candidates} onSelect={handleSelectCandidate} currentUser={CURRENT_USER} />;
-                    case 'stage_3':   return <ReportView candidates={candidates} onUpdate={handleUpdateCandidate} setCurrentReport={setCurrentReport} />;
-                    case 'search':    return <SearchView candidates={candidates} onSelect={handleSelectCandidate} />;
-                    case 'trash':     return <TrashView candidates={candidates} onUpdate={handleUpdateCandidate} />;
-                    default:          return <DashboardView candidates={candidates} onNavigate={setActiveTab} />;
-                }
-            };
+        // 4. LÓGICA DE "VISTO" (Aquí estaba el bug)
+        // Calculamos esto AHORA, fuera del setCandidates, para enviarlo bien a la API
+        if (currentCandidate && activeTab === 'stage_1' && currentCandidate.status_interno === 'new' && !updates.stage) {
+            finalUpdates.status_interno = 'viewed';
+        }
 
-            const menuItems = [
-                { id: 'dashboard', label: 'Inicio', icon: LayoutDashboard },
-                { type: 'divider', label: 'PIPELINE' },
-                { id: 'stage_1', label: '1. Explorar', icon: UserPlus, sub: 'Nuevos Ingresos' },
-                { id: 'stage_2', label: '2. Gestión', icon: Users, sub: 'En Entrevista' },
-                { id: 'stage_3', label: '3. Generar Informe', icon: FileJson, sub: 'Listos para Asignar' },
-                { type: 'divider', label: 'SISTEMA' },
-                { id: 'search', label: 'Búsqueda', icon: Search },
-                { id: 'trash', label: 'Papelera', icon: Trash2 },
-            ];
+        // 5. Actualizamos la PANTALLA (Frontend)
+        setCandidates(prev => prev.map(c => {
+            if (c.id === id) {
+                return { ...c, ...finalUpdates };
+            }
+            return c;
+        }));
 
+        // 6. Actualizamos la BASE DE DATOS (Backend)
+        // Ahora finalUpdates lleva el dato 'viewed' correcto
+        await api.candidates.update(id, finalUpdates);
+    };
+
+    const handleSelectCandidate = (id) => {
+        setSelectedCandidateId(id);
+        handleUpdateCandidate(id, {});
+    };
+
+    // 6. RENDERIZADO DE CONTENIDO (Única declaración)
+    const renderContent = () => {
+        if (currentReport) {
+            return <ProfessionalReport data={currentReport} onBack={() => setCurrentReport(null)} />;
+        }
+
+        if (selectedCandidateId) {
+            const cand = candidates.find(c => c.id === selectedCandidateId);
+            if (!cand) return null;
             return (
-                <div className="flex h-screen bg-slate-950 font-sans text-slate-200 selection:bg-blue-500/30 overflow-hidden">
-                    <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-20">
-                        <div className="h-24 flex items-center justify-center px-6 border-b border-slate-800">
-                            <img src={LOGO_URL} alt="Logo" className="h-20 w-auto object-contain mix-blend-screen opacity-90 transition-all hover:scale-105" />
-                        </div>
-                        <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto custom-scrollbar">
-                            {menuItems.map((item, idx) => {
-                                if (item.type === 'divider') return <div key={idx} className="px-3 pt-6 pb-2 text-[10px] font-bold text-slate-600 tracking-widest uppercase">{item.label}</div>;
-                                const isActive = activeTab === item.id;
-                                return (
-                                    <button key={item.id} onClick={() => { setActiveTab(item.id); setSelectedCandidateId(null); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all group relative ${isActive ? 'bg-blue-600/10 text-blue-400 border border-blue-600/20' : 'text-slate-400 hover:bg-slate-800 border border-transparent'}`}>
-                                        <item.icon size={18} className={isActive ? 'text-blue-400' : 'text-slate-500 group-hover:text-slate-300'} />
-                                        <div className="flex flex-col items-start text-left"><span className="font-medium leading-none">{item.label}</span>{item.sub && isActive && <span className="text-[10px] opacity-70 font-normal mt-1">{item.sub}</span>}</div>
-                                        {isActive && <div className="absolute right-2 w-1.5 h-1.5 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.8)]" />}
-                                    </button>
-                                );
-                            })}
-                        </nav>
-                        <div className="p-4 border-t border-slate-800">
-                            <button className="flex items-center gap-3 w-full p-2 rounded-xl hover:bg-slate-800 transition-colors group border border-transparent hover:border-slate-700">
-                                <Avatar name={CURRENT_USER} />
-                                <div className="flex-col flex items-start overflow-hidden"><span className="text-xs font-bold text-slate-200 group-hover:text-white">{CURRENT_USER}</span><span className="text-[10px] text-emerald-400 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"/> Online</span></div>
-                                <Settings size={14} className="ml-auto text-slate-600 group-hover:text-slate-400 transition-colors"/>
-                            </button>
-                        </div>
-                    </aside>
-                    <main className="flex-1 overflow-auto p-6 relative bg-slate-950">
-                        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.03] pointer-events-none mix-blend-overlay"></div>
-                        <div className="absolute top-0 left-0 w-full h-64 bg-gradient-to-b from-blue-900/10 to-transparent pointer-events-none"></div>
-                        <div className="relative z-10 h-full">{renderContent()}</div>
-                    </main>
-                </div>
+                <CandidateDetail 
+                    key={cand.id} 
+                    candidate={cand} 
+                    onBack={() => setSelectedCandidateId(null)} 
+                    onUpdate={handleUpdateCandidate} 
+                    loading={loading}
+                    currentUser={currentUser} 
+                />
             );
         }
+
+        switch (activeTab) {
+            case 'dashboard': return <DashboardView candidates={candidates} onNavigate={setActiveTab} />;
+            case 'stage_1':   return <ExploreView candidates={candidates} onSelect={handleSelectCandidate} onUpdate={handleUpdateCandidate} loading={loading} onAddClick={() => setShowManualModal(true)} />;
+            case 'stage_2':   return <ManageView candidates={candidates} onSelect={handleSelectCandidate} currentUser={currentUser} />;
+            case 'stage_3':   return <ReportView candidates={candidates} onUpdate={handleUpdateCandidate} setCurrentReport={setCurrentReport} />;
+            case 'search':    return <SearchView candidates={candidates} onSelect={handleSelectCandidate} />;
+            case 'trash':     return <TrashView candidates={candidates} onUpdate={handleUpdateCandidate} />;
+            default:          return <DashboardView candidates={candidates} onNavigate={setActiveTab} />;
+        }
+    };
+
+    const menuItems = [
+        { id: 'dashboard', label: 'Inicio', icon: LayoutDashboard },
+        { type: 'divider', label: 'PIPELINE' },
+        { id: 'stage_1', label: '1. Explorar', icon: UserPlus, sub: 'Nuevos Ingresos' },
+        { id: 'stage_2', label: '2. Gestión', icon: Users, sub: 'En Entrevista' },
+        { id: 'stage_3', label: '3. Generar Informe', icon: FileJson, sub: 'Listos para Asignar' },
+        { type: 'divider', label: 'SISTEMA' },
+        { id: 'search', label: 'Búsqueda', icon: Search },
+        { id: 'trash', label: 'Papelera', icon: Trash2 },
+    ];
+
+   // 7. ESTRUCTURA PRINCIPAL (ACTUALIZADA CON MODAL)
+   return (
+        <>
+            <div className="flex h-screen bg-slate-950 font-sans text-slate-200 selection:bg-blue-500/30 overflow-hidden">
+                <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-20">
+                    <div className="h-24 flex items-center justify-center px-6 border-b border-slate-800">
+                        <img src={LOGO_URL} alt="Logo" className="h-20 w-auto object-contain mix-blend-screen opacity-90 transition-all hover:scale-105" />
+                    </div>
+                    <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto custom-scrollbar">
+                        {menuItems.map((item, idx) => {
+                            if (item.type === 'divider') return <div key={idx} className="px-3 pt-6 pb-2 text-[10px] font-bold text-slate-600 tracking-widest uppercase">{item.label}</div>;
+                            const isActive = activeTab === item.id;
+                            return (
+                                <button key={item.id} onClick={() => { setActiveTab(item.id); setSelectedCandidateId(null); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all group relative ${isActive ? 'bg-blue-600/10 text-blue-400 border border-blue-600/20' : 'text-slate-400 hover:bg-slate-800 border border-transparent'}`}>
+                                    <item.icon size={18} className={isActive ? 'text-blue-400' : 'text-slate-500 group-hover:text-slate-300'} />
+                                    <div className="flex flex-col items-start text-left"><span className="font-medium leading-none">{item.label}</span>{item.sub && isActive && <span className="text-[10px] opacity-70 font-normal mt-1">{item.sub}</span>}</div>
+                                    {isActive && <div className="absolute right-2 w-1.5 h-1.5 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.8)]" />}
+                                </button>
+                            );
+                        })}
+                    </nav>
+                    <div className="p-4 border-t border-slate-800">
+                        <button className="flex items-center gap-3 w-full p-2 rounded-xl hover:bg-slate-800 transition-colors group border border-transparent hover:border-slate-700">
+                            <Avatar name={currentUser} />
+                            <div className="flex-col flex items-start overflow-hidden">
+                                <span className="text-xs font-bold text-slate-200 group-hover:text-white">{currentUser}</span>
+                                <span className="text-[10px] text-emerald-400 flex items-center gap-1">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"/> Online
+                                </span>
+                            </div>
+                            <Settings size={14} className="ml-auto text-slate-600 group-hover:text-slate-400 transition-colors"/>
+                        </button>
+                    </div>
+                </aside>
+                <main className="flex-1 overflow-auto p-6 relative bg-slate-950">
+                    <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.03] pointer-events-none mix-blend-overlay"></div>
+                    <div className="absolute top-0 left-0 w-full h-64 bg-gradient-to-b from-blue-900/10 to-transparent pointer-events-none"></div>
+                    <div className="relative z-10 h-full">{renderContent()}</div>
+                </main>
+            </div>
+
+            {/* MODAL FÍSICO (Controlado por el estado showManualModal) */}
+            <ManualUploadModal 
+                isOpen={showManualModal} 
+                onClose={() => setShowManualModal(false)} 
+                onUploadSuccess={() => cargarDatos(true)} 
+            />
+        </>
+    );
+}
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);

@@ -1075,76 +1075,53 @@ async function analizarCorreos() {
 
       
 
-      // 1. Mapeo Inteligente con Fecha Unificada
-
-      let candidatos = snap.docs.map(doc => {
-
-        const data = doc.data();
-
-        
-
-        // --- LÓGICA DE ORDENAMIENTO ---
-
-        // Buscamos cualquier fecha disponible para que nadie se quede sin ordenar
-
-        let timestamp = 0;
-
-
-
-        if (data.fecha_correo) {
-
-            // Prioridad 1: Fecha real del correo
-
-            timestamp = new Date(data.fecha_correo).getTime();
-
-        } else if (data.creado_en) {
-
-            // Prioridad 2: Fecha de creación en base de datos (Soporta Timestamp de Firebase)
-
-            timestamp = data.creado_en.toDate ? data.creado_en.toDate().getTime() : new Date(data.creado_en).getTime();
-
-        } else if (data.fecha) {
-
-            // Prioridad 3: Fecha genérica
-
-            timestamp = new Date(data.fecha).getTime();
-
-        }
-
-
-
-        // Recuperamos datos visuales
-
-        const nombreFinal = data.nombre || data.datos_personales?.nombre_completo || data.applicant_email || "Sin Nombre";
-
-        const linkFinal = data.cv_url || data.cv_storage_path || null;
-
+// --- INICIO BLOQUE REEMPLAZADO: MAPEO UNIFICADO ---
+let candidatos = snap.docs.map(doc => {
+  const data = doc.data();
   
+  // 1. Lógica de ordenamiento temporal unificada
+  let timestamp = 0;
+  if (data.fecha_correo) {
+      timestamp = new Date(data.fecha_correo).getTime();
+  } else if (data.creado_en) {
+      // Soporte para Timestamp de Firebase o string ISO
+      timestamp = data.creado_en.toDate ? data.creado_en.toDate().getTime() : new Date(data.creado_en).getTime();
+  } else if (data.fecha) {
+      timestamp = new Date(data.fecha).getTime();
+  }
 
-        return {
+  // 2. Recuperamos datos visuales y de ESTADO
+  const nombreFinal = data.nombre || data.datos_personales?.nombre_completo || data.applicant_email || "Sin Nombre";
+  const linkFinal = data.cv_url || data.cv_storage_path || null;
 
-          id: doc.id,
+  return {
+    id: doc.id,
+    nombre: nombreFinal,
+    email: data.email || data.applicant_email || "S/E",
+    puesto: data.puesto || "Sin puesto",
+    cv_url: linkFinal,
+    
+    // Fechas para ordenar y mostrar
+    fecha_orden: timestamp, 
+    fecha: data.fecha || data.creado_en, 
 
-          nombre: nombreFinal,
-
-          email: data.email || data.applicant_email || "S/E",
-
-          puesto: data.puesto || "Sin puesto",
-
-          cv_url: linkFinal,
-
-          fecha_orden: timestamp, // <--- Usaremos esto para ordenar
-
-          ia_score: data.ia_score || 0,
-
-          // 🔥 AGREGA ESTA LÍNEA AQUÍ 👇
+    // 🔥 PERSISTENCIA: Leemos las etiquetas reales de la DB
+    stage: data.stage || 'stage_1',           
+    status_interno: data.status_interno || 'new',
+    assignedTo: data.assignedTo || null,      
+    history: data.historial_movimientos || [], // <--- CRONOLOGÍA
+    
+    // Datos de IA y notas
+    ia_score: data.ia_score || 0,
     ia_motivos: data.ia_motivos || data.motivo || "Análisis pendiente...", 
+    ia_alertas: data.ia_alertas || [],
     video_url: data.video_url || null, 
-  respuestas_filtro: data.respuestas_filtro || {},
-    motivo: data.motivo || "",
-    experiencia_resumen: data.experiencia ? JSON.stringify(data.experiencia).slice(0, 100) : ""
+    respuestas_filtro: data.respuestas_filtro || {},
+    motivo: data.motivo || "", 
+    notes: data.notes || ""    
   };
 })
+// --- FIN BLOQUE REEMPLAZADO ---
 
       .filter(c => {
 
@@ -2832,27 +2809,33 @@ async function verificaConocimientosMinimos(puesto, textoCandidato, declaracione
     return { score: 50, pasa: false, motivos: "Error de análisis IA. Revisar manual.", alertas: ["Error IA"] };
   }
 }
+// ==========================================
+// 📨 WEBHOOK ZOHO: CREACIÓN CON HISTORIAL DE INICIO
+// ==========================================
 app.post("/webhook/zoho", async (req, res) => {
   try {
-    console.log("📨 [Webhook] Datos recibidos de Zoho. Iniciando modo PASIVO.");
+    console.log("📨 [Webhook] Datos recibidos de Zoho.");
     const data = req.body;
 
-    // 1. SANITIZACIÓN ID (CRÍTICO: Mismo método que usaremos en el Email)
+    // 1. SANITIZACIÓN ID
     const emailRaw = (data.Email || "").trim().toLowerCase();
     if (!emailRaw) return res.status(400).send("Falta Email");
     
     // ID ÚNICO: grillo.vge98@gmail.com -> grillo_vge98_gmail_com
     const safeId = emailRaw.replace(/[^a-z0-9]/g, "_");
 
-    // 2. OBJETO BASE (Sin IA todavía)
+    // 2. FECHA EXACTA PARA EL HISTORIAL
+    const nowISO = new Date().toISOString();
+
+    // 3. OBJETO BASE (CON HISTORIAL INICIAL)
     const candidato = {
       id: safeId,
       nombre: `${data.Nombre_Completo || ""} ${data.Apellido || ""}`.trim(),
       email: emailRaw,
       telefono: data.Telefono || "",
       puesto: data.Puesto_Solicitado || "General",
-      video_url: data.Video_Link || "",
-      // Guardamos las respuestas para que la IA las lea DESPUÉS (cuando llegue el mail)
+      video_url: data.Video_Link || "", // Guardamos el link crudo por si acaso
+      
       respuestas_filtro: {
         salario: data.Acepta_Salario,
         monitoreo: data.Acepta_Monitoreo,
@@ -2861,27 +2844,130 @@ app.post("/webhook/zoho", async (req, res) => {
         resolucion: data.Resolucion_Problemas
       },
 
-      // ESTADO INICIAL: "ESPERANDO PDF"
+      // ESTADO INICIAL
       ia_score: 0,
-      ia_status: "waiting_cv", // El frontend puede mostrar un spinner o "Cargando CV..."
+      ia_status: "waiting_cv", 
       ia_motivos: "Esperando recepción de CV para análisis completo.",
       
-      cv_url: "", // Vacío por ahora
+      cv_url: "", 
       tiene_pdf: false,
       
+      // ETIQUETAS DE ESTADO
+      stage: 'stage_1',           // Nace en Explorar
+      status_interno: 'new',      // Nace como Nuevo
+      
       creado_en: admin.firestore.FieldValue.serverTimestamp(),
-      origen: "webhook_zoho_passive"
+      origen: "webhook_zoho_passive",
+
+      // 🔥 AQUÍ ESTÁ LA MAGIA: EL PRIMER EVENTO CRONOLÓGICO
+      historial_movimientos: [
+        {
+            date: nowISO,
+            event: 'Ingreso al Pipeline',
+            detail: 'Origen: Formulario Web (Zoho)',
+            usuario: 'Sistema'
+        }
+      ]
     };
 
-    // 3. GUARDAR EN LA CARPETA MADRE
+    // 4. GUARDAR EN FIRESTORE (Usamos merge por seguridad)
     await firestore.collection("CVs_staging").doc(safeId).set(candidato, { merge: true });
 
-    console.log(`✅ [Webhook] Candidato guardado en espera: ${safeId}`);
+    console.log(`✅ [Webhook] Candidato ${safeId} creado con historial de ingreso.`);
     res.status(200).send("OK");
 
   } catch (error) {
     console.error("❌ Error Webhook:", error);
     res.status(500).send("Error");
+  }
+});
+
+// ==========================================================================
+// 📥 NUEVA FUNCIÓN: CARGA MANUAL CON CLASIFICACIÓN (Persistente)
+// ==========================================================================
+// Reutilizamos 'upload' que ya tienes configurado con Multer (Fuente 118)
+
+app.post("/candidatos/ingreso-manual", upload.single('cv'), async (req, res) => {
+  try {
+      console.log("⚡ Iniciando carga manual persistente...");
+      
+      // 1. Validaciones Iniciales
+      if (!req.file) return res.status(400).json({ error: "Falta el archivo PDF" });
+      const { email, nombre, puesto } = req.body; // Datos que vienen del formulario manual
+      
+      // Generamos un ID seguro igual que en el correo (Fuente 74)
+      const emailSafe = (email || "manual_no_email").trim().toLowerCase();
+      const safeId = emailSafe.replace(/[^a-z0-9]/g, "_") + "_" + Date.now().toString().slice(-4);
+      
+      console.log(`📂 Procesando ingreso manual para ID: ${safeId}`);
+
+      // 2. Subir a Google Cloud Storage (Igual que Fuente 75)
+      // Esto permite que el "Analista Profundo" pueda leer el archivo después.
+      const destFileName = `CVs_staging/files/${safeId}_CV.pdf`;
+      const bucketFile = bucket.file(destFileName);
+      
+      // Leemos el archivo desde la ruta temporal de Multer
+      const fs = require('fs');
+      const fileBuffer = fs.readFileSync(req.file.path);
+      
+      await bucketFile.save(fileBuffer, { metadata: { contentType: "application/pdf" } });
+      
+      // Generamos URL firmada para el dashboard
+      const [publicCvUrl] = await bucketFile.getSignedUrl({ action: 'read', expires: '01-01-2035' });
+
+      // 3. Extraer Texto para la IA (Igual que Fuente 76)
+      const pdfData = await pdfParse(fileBuffer);
+      const textoCV = pdfData.text.slice(0, 20000); // Límite de caracteres
+
+      // 4. Ejecutar el Clasificador (IA) (Igual que Fuente 77-79)
+      // Usamos tu función existente 'verificaConocimientosMinimos' o el prompt directo
+      // Aquí reutilizo la lógica de Score que ya tienes implementada
+      console.log("🤖 Ejecutando Clasificador IA...");
+      
+      // NOTA: Reutilizamos la función verificaConocimientosMinimos que está en tu código (Fuente 176)
+      // Si no tienes esa función exportada, usamos la lógica directa.
+      const analisisIA = await verificaConocimientosMinimos(
+          puesto || "General", 
+          textoCV
+      );
+
+      // 5. Guardar en Firestore (La Verdad Única - Fuente 80)
+      const nuevoCandidato = {
+          id: safeId,
+          nombre: nombre || "Candidato Manual",
+          email: emailSafe,
+          puesto: puesto || "Sin especificar",
+          
+          // Datos del Archivo
+          cv_url: publicCvUrl,
+          cv_storage_path: destFileName,
+          tiene_pdf: true,
+          texto_extraido: textoCV, // Guardamos texto para no gastar OCR después
+          
+          // Datos de IA (Clasificación Inicial)
+          ia_score: analisisIA.score || 50,
+          ia_motivos: analisisIA.motivos || "Ingresado manualmente",
+          ia_alertas: analisisIA.alertas || [],
+          ia_status: "processed",
+          
+          // Metadatos
+          origen: "carga_manual",
+          creado_en: admin.firestore.FieldValue.serverTimestamp(),
+          actualizado_en: admin.firestore.FieldValue.serverTimestamp()
+      };
+
+      // Escribimos en la colección maestra (MAIN_COLLECTION definida en Fuente 29)
+      await firestore.collection("CVs_staging").doc(safeId).set(nuevoCandidato);
+
+      // Limpieza del archivo temporal local
+      try { fs.unlinkSync(req.file.path); } catch(e) {}
+
+      console.log(`✅ Candidato manual guardado: ${safeId} - Score: ${analisisIA.score}`);
+      res.json({ ok: true, id: safeId, score: analisisIA.score });
+
+  } catch (error) {
+      console.error("❌ Error en carga manual:", error);
+      res.status(500).json({ error: error.message });
   }
 });
 
@@ -2968,25 +3054,69 @@ async function storageProbe() {
   }
 }
 // ==========================================
-// 🛠️ ENDPOINT GENÉRICO PARA ACTUALIZAR CAMPOS (PATCH)
+// 🛠️ ENDPOINT INTELIGENTE (PATCH) - ACTUALIZA Y GUARDA HISTORIAL
 // ==========================================
 app.patch("/candidatos/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = req.body; // Ej: { status_interno: 'gestion' }
+    const updates = req.body; // Ej: { stage: 'stage_2', assignedTo: 'Gladymar' }
 
     if (!id || Object.keys(updates).length === 0) {
       return res.status(400).send("Faltan datos.");
     }
 
-    // Aseguramos que solo toque la colección maestra
-    await firestore.collection("CVs_staging").doc(id).update({
+    // SIEMPRE apuntamos a la colección maestra
+    const docRef = firestore.collection("CVs_staging").doc(id);
+    const docSnap = await docRef.get();
+
+    if (!docSnap.exists) {
+        return res.status(404).send("Candidato no encontrado en CVs_staging");
+    }
+
+    // Preparar el objeto final de actualización
+    let finalUpdate = {
       ...updates,
       actualizado_en: new Date().toISOString()
-    });
+    };
 
-    console.log(`🔄 Candidato ${id} actualizado:`, Object.keys(updates));
+    // 🕵️‍♂️ DETECTIVE DE HISTORIAL: Si cambió el stage, status o assignedTo, lo anotamos.
+    if (updates.stage || updates.status_interno || updates.assignedTo) {
+        
+        let detalleEvento = `Actualización: ${updates.status_interno || 'General'}`;
+        let tituloEvento = 'Actualización de Estado';
+
+        // Personalizamos el mensaje según lo que pasó
+        if (updates.stage === 'stage_2') {
+            tituloEvento = 'Aprobado a Gestión';
+            detalleEvento = updates.assignedTo ? `Asignado a: ${updates.assignedTo}` : 'Aprobado sin asignación';
+        } else if (updates.stage === 'trash') {
+            tituloEvento = 'Movido a Papelera';
+            detalleEvento = 'Descartado manualmente';
+          } else if (updates.stage === 'stage_1') {
+            tituloEvento = 'Restaurado';
+            detalleEvento = 'Recuperado de Papelera a Exploración';
+        } else if (updates.stage === 'stage_3') {
+            tituloEvento = 'Listo para Informe';
+            detalleEvento = 'Proceso de entrevista finalizado';
+        }
+
+        const nuevoEvento = {
+            date: new Date().toISOString(),
+            event: tituloEvento,
+            detail: detalleEvento,
+            usuario: updates.assignedTo || 'Sistema' 
+        };
+
+        // Usamos arrayUnion para agregar al historial sin borrar lo anterior
+        finalUpdate.historial_movimientos = admin.firestore.FieldValue.arrayUnion(nuevoEvento);
+    }
+
+    // Impactar en Firestore
+    await docRef.update(finalUpdate);
+
+    console.log(`✅ [PATCH] Candidato ${id} actualizado en CVs_staging.`);
     res.json({ ok: true });
+
   } catch (error) {
     console.error("❌ Error actualizando candidato:", error);
     res.status(500).send("Error al actualizar.");
