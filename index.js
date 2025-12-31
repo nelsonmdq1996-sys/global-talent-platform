@@ -1194,7 +1194,7 @@ app.post("/candidatos/:id/resumen", async (req, res) => {
     }
 
     // --- CASO 2: PROCESO IDEAL (Candidatos del Pipeline) ---
-    const docRef = firestore.collection("CVs_aprobados").doc(id);
+    const docRef = firestore.collection(MAIN_COLLECTION).doc(id);
     const doc = await docRef.get();
     
     if (!doc.exists) {
@@ -2285,7 +2285,7 @@ app.get("/resumen/:id", async (req, res) => {
   try {
     const id = req.params.id;
     // Buscamos en la colección correcta 'CVs_aprobados'
-    const snap = await firestore.collection("CVs_aprobados").doc(id).get();
+    const snap = await firestore.collection(MAIN_COLLECTION).doc(id).get();
     
     if (!snap.exists) return res.json({ resumen: "Candidato no encontrado" });
     const c = snap.data();
@@ -2810,38 +2810,48 @@ async function verificaConocimientosMinimos(puesto, textoCandidato, declaracione
   }
 }
 // ==========================================
-// 📨 WEBHOOK ZOHO: CREACIÓN CON HISTORIAL DE INICIO
+// 📨 WEBHOOK ZOHO: CREACIÓN BLINDADA (ANTI-CRASH + VIDEO)
 // ==========================================
-app.post("/webhook/zoho", async (req, res) => {
+app.post("/webhook/zoho", upload.none(), async (req, res) => {
   try {
     console.log("📨 [Webhook] Datos recibidos de Zoho.");
-    const data = req.body;
+    
+    // 1. Detección Inteligente del Payload (Por si llega encapsulado)
+    let data = req.body;
+    if (data.payload) {
+        try { data = JSON.parse(data.payload); } catch(e) {}
+    } else if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch(e) {}
+    }
 
-    // 1. SANITIZACIÓN ID
+    // 2. SANITIZACIÓN ID
     const emailRaw = (data.Email || "").trim().toLowerCase();
     if (!emailRaw) return res.status(400).send("Falta Email");
     
-    // ID ÚNICO: grillo.vge98@gmail.com -> grillo_vge98_gmail_com
+    // ID ÚNICO
     const safeId = emailRaw.replace(/[^a-z0-9]/g, "_");
 
-    // 2. FECHA EXACTA PARA EL HISTORIAL
+    // 3. FECHA EXACTA
     const nowISO = new Date().toISOString();
 
-    // 3. OBJETO BASE (CON HISTORIAL INICIAL)
+    // 4. OBJETO BASE (CON SEGURIDAD ANTI-CRASH || "")
     const candidato = {
       id: safeId,
       nombre: `${data.Nombre_Completo || ""} ${data.Apellido || ""}`.trim(),
       email: emailRaw,
       telefono: data.Telefono || "",
       puesto: data.Puesto_Solicitado || "General",
-      video_url: data.Video_Link || "", // Guardamos el link crudo por si acaso
+      
+      // Video Link (Seguro)
+      video_url: data.Video_Link || "", 
       
       respuestas_filtro: {
-        salario: data.Acepta_Salario,
-        monitoreo: data.Acepta_Monitoreo,
-        disponibilidad: data.Disponibilidad,
-        herramientas: data.Top_Herramientas,
-        resolucion: data.Resolucion_Problemas
+        // Aquí aplicamos la seguridad para que no explote Firestore si falta algo
+        salario: data.Acepta_Salario || "",
+        monitoreo: data.Acepta_Monitoreo || "",
+        disponibilidad: data.Disponibilidad || "",
+        herramientas: data.Top_Herramientas || "",
+        logro_destacado: data.Logro_Destacado || ""
       },
 
       // ESTADO INICIAL
@@ -2853,13 +2863,13 @@ app.post("/webhook/zoho", async (req, res) => {
       tiene_pdf: false,
       
       // ETIQUETAS DE ESTADO
-      stage: 'stage_1',           // Nace en Explorar
-      status_interno: 'new',      // Nace como Nuevo
+      stage: 'stage_1',           
+      status_interno: 'new',      
       
       creado_en: admin.firestore.FieldValue.serverTimestamp(),
       origen: "webhook_zoho_passive",
 
-      // 🔥 AQUÍ ESTÁ LA MAGIA: EL PRIMER EVENTO CRONOLÓGICO
+      // HISTORIAL INICIAL
       historial_movimientos: [
         {
             date: nowISO,
@@ -2870,18 +2880,17 @@ app.post("/webhook/zoho", async (req, res) => {
       ]
     };
 
-    // 4. GUARDAR EN FIRESTORE (Usamos merge por seguridad)
+    // 5. GUARDAR EN FIRESTORE
     await firestore.collection("CVs_staging").doc(safeId).set(candidato, { merge: true });
 
-    console.log(`✅ [Webhook] Candidato ${safeId} creado con historial de ingreso.`);
+    console.log(`✅ [Webhook] Candidato ${safeId} guardado correctamente.`);
     res.status(200).send("OK");
 
   } catch (error) {
     console.error("❌ Error Webhook:", error);
-    res.status(500).send("Error");
+    res.status(500).send("Error interno: " + error.message);
   }
 });
-
 // ==========================================================================
 // 📥 NUEVA FUNCIÓN: CARGA MANUAL CON CLASIFICACIÓN (Persistente)
 // ==========================================================================
@@ -3123,6 +3132,75 @@ app.patch("/candidatos/:id", async (req, res) => {
   }
 });
 // ==========================================
+// 🧠 ENDPOINT: RE-ANÁLISIS POST-ENTREVISTA (FUSIÓN DE DATOS)
+// ==========================================
+app.post("/candidatos/:id/analizar-entrevista", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { transcript } = req.body; // Texto de la entrevista
+
+    if (!transcript) return res.status(400).json({ error: "Falta la transcripción" });
+
+    // 1. Usamos la colección unificada
+    const docRef = firestore.collection(MAIN_COLLECTION).doc(id);
+    const docSnap = await docRef.get();
+    
+    if (!docSnap.exists) return res.status(404).json({ error: "Candidato no encontrado" });
+
+    const data = docSnap.data();
+
+    // 2. Prompt de Ingeniería: Fusión de Contextos
+    const prompt = `
+      ACTÚA COMO: Reclutador Senior de Global Talent Connections.
+      OBJETIVO: Recalcular el puntaje del candidato cruzando su CV original con la ENTREVISTA recién realizada.
+
+      --- CONTEXTO HISTÓRICO ---
+      PERFIL ORIGINAL (CV): "${data.puesto || 'General'}"
+      ANÁLISIS PREVIO: "${data.ia_motivos || 'Sin análisis previo'}"
+      SCORE ANTERIOR: ${data.ia_score || 0}
+      
+      --- NUEVA EVIDENCIA (ENTREVISTA REAL) ---
+      "${transcript.slice(0, 15000)}"
+
+      --- TAREA DE FUSIÓN ---
+      1. VALIDACIÓN: ¿La entrevista confirma lo que decía el CV o detectas inconsistencias/mentiras?
+      2. CORRECCIÓN: Si el candidato demostró ser mejor en vivo, SUBE el score. Si fue vago o mentiroso, BÁJALO.
+      3. FLAGS: Genera nuevas alertas si detectas riesgos (ej: "Inglés peor de lo esperado", "Dudas sobre disponibilidad").
+
+      SALIDA JSON ÚNICAMENTE:
+      {
+        "score": (0-100),
+        "motivos": "Nuevo resumen integrando la entrevista. Ej: 'Mantiene un perfil sólido en React, pero se detectó nivel de inglés inferior al B2 declarado en CV...'",
+        "alertas": ["Alerta 1", "Alerta 2"]
+      }
+    `;
+
+    // 3. Ejecución IA
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text().replace(/```json/g, "").replace(/```/g, "").trim();
+    
+    // Extracción segura de JSON
+    const jsonStart = responseText.indexOf('{');
+    const jsonEnd = responseText.lastIndexOf('}');
+    const analisis = JSON.parse(responseText.substring(jsonStart, jsonEnd + 1));
+
+    // 4. Persistencia (Sobreescribimos para que la ficha quede actualizada)
+    await docRef.update({
+        ia_score: analisis.score,
+        ia_motivos: analisis.motivos,
+        ia_alertas: analisis.alertas || [],
+        interview_analyzed: true, 
+        actualizado_en: new Date().toISOString()
+    });
+
+    res.json({ ok: true, ...analisis });
+
+  } catch (e) {
+    console.error("Error re-analizando entrevista:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+// ==========================================
 // 🚀 INICIO DEL SERVIDOR (CON BUCLE AUTOMÁTICO)
 // ==========================================
 app.listen(PORT, "0.0.0.0", async () => {
@@ -3167,4 +3245,3 @@ app.listen(PORT, "0.0.0.0", async () => {
       analizarCorreos();
   }, 60000); 
 });
-// Forzar reinicio v2

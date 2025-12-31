@@ -112,7 +112,7 @@ const LucideIcon = ({ name, size = 24, className, ...props }) => {
             'Briefcase', 'Lock', 'UserCheck', 'Loader2', 'Trash2', 'Undo2', 'MoreVertical',
             'CheckSquare', 'Printer', 'Eye', 'Mail', 'Activity', 'Server', 'Database', 'Globe',
             'ThumbsUp', 'ThumbsDown', 'Link', 'Download', 'Share2', 'History',
-            'BarChart2', 'List', 'Sparkles'
+            'BarChart2', 'List', 'Sparkles', 'Save'
         ];
 
         const Icons = {};
@@ -130,7 +130,7 @@ const LucideIcon = ({ name, size = 24, className, ...props }) => {
             Briefcase, Lock, UserCheck, Loader2, Trash2, Undo2, MoreVertical,
             CheckSquare, Printer, Eye, Mail, Activity, Server, Database, Globe,
             ThumbsUp, ThumbsDown, LinkIcon, Download, Share2, History,
-            BarChart2, List, Sparkles
+            BarChart2, List, Sparkles, Save
         } = Icons;
 
         // --- 1. ARQUITECTURA DE DATOS (CEREBRO) ---
@@ -1664,18 +1664,24 @@ function ReportView({ candidates, onUpdate, setCurrentReport }) {
         </div>
     );
 }
-// --- VISTA DETALLE MEJORADA (CON MODAL DE DESCARTE) ---
+// --- VISTA DETALLE MEJORADA (CON GESTIÓN DE ENTREVISTA + CHECKLIST) ---
 function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
     const [noteInput, setNoteInput] = useState(candidate.notes || "");
     const [isEditing, setIsEditing] = useState(false);
     const [newCvLink, setNewCvLink] = useState(candidate.cv_url || "");
     const [newVideoLink, setNewVideoLink] = useState(candidate.video_url || "");
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [activeSubTab, setActiveSubTab] = useState('gestion');
-    const [showManualModal, setShowManualModal] = useState(false);
 
-    // ESTADOS PARA EL MODAL DE DESCARTE
+    // ESTADOS PARA EL MODAL DE DESCARTE (TU CÓDIGO ORIGINAL)
     const [showDiscardModal, setShowDiscardModal] = useState(false);
     const [discardReason, setDiscardReason] = useState("");
+
+    // --- NUEVOS ESTADOS: GESTIÓN DE ENTREVISTA (STAGE 2) ---
+    const [meetLink, setMeetLink] = useState(candidate.meet_link || "");
+    const [transcript, setTranscript] = useState(candidate.interview_transcript || "");
+    const [form2Status, setForm2Status] = useState(candidate.process_step_2_form || "pending"); // pending, sent, received
+    const [finalResult, setFinalResult] = useState(candidate.process_step_3_result || null); // qualified, disqualified
 
     // Recuperar alertas y skills
     const flags = candidate.ia_alertas || candidate.alerts || [];
@@ -1685,6 +1691,7 @@ function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
             : candidate.respuestas_filtro.herramientas.split(',').map(s => s.trim()))
         : ['Sin datos técnicos'];
 
+    // --- ACCIONES EXISTENTES ---
     const saveLinks = () => {
         onUpdate(candidate.id, { cv_url: newCvLink, video_url: newVideoLink });
         setIsEditing(false);
@@ -1697,23 +1704,142 @@ function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
             assignedTo: currentUser 
         });
     };
+    // --- 6. FUNCIÓN DE RE-ANÁLISIS (CONECTADA AL BACKEND) ---
+    const handleAnalyzeInterview = async () => {
+        // Validación básica
+        if (!transcript || transcript.length < 10) {
+            return alert("⚠️ Por favor, escribe o pega notas de la entrevista antes de analizar.");
+        }
+        
+        setIsAnalyzing(true); // Activa el loader
+        try {
+            // Llamamos al endpoint "Cerebro" que creamos en el backend
+            const res = await fetch(`${API_URL}/candidatos/${candidate.id}/analizar-entrevista`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ transcript })
+            });
+            
+            if (!res.ok) throw new Error("Error en la conexión con la IA");
+            
+            const data = await res.json();
+            
+            // Actualizamos la vista visualmente al instante
+            onUpdate(candidate.id, { 
+                ia_score: data.score, 
+                ia_motivos: data.motivos,
+                ia_alertas: data.alertas
+            });
+            
+            alert(`✅ Análisis completado.\nNuevo Score: ${data.score}/100`);
+            
+        } catch (error) {
+            console.error(error);
+            alert("❌ Ocurrió un error al analizar la entrevista. Revisa la consola.");
+        } finally {
+            setIsAnalyzing(false); // Desactiva el loader
+        }
+    };
 
-    // FUNCIÓN PARA CONFIRMAR EL DESCARTE
     const confirmDiscard = () => {
         if (!discardReason.trim()) return alert("Por favor escribe un motivo.");
-        
         onUpdate(candidate.id, { 
             stage: 'trash', 
-            motivo: discardReason, // Guardamos el motivo
-            notes: discardReason   // También en notas para redundancia
+            motivo: discardReason, 
+            notes: discardReason   
         });
         setShowDiscardModal(false);
     };
 
+    // --- NUEVAS ACCIONES (STAGE 2) ---
+    
+    // 1. Guardar Link Meet (al salir del campo)
+    const saveMeetLink = () => {
+        if (meetLink !== candidate.meet_link) {
+            onUpdate(candidate.id, { meet_link: meetLink });
+        }
+    };
+
+    // 2. Guardar Transcripción (al salir del campo)
+    const saveTranscript = () => {
+        if (transcript !== candidate.interview_transcript) {
+            onUpdate(candidate.id, { interview_transcript: transcript });
+        }
+    };
+
+    // 3. Abrir Email Automático
+    const handleOpenMail = () => {
+        if (!meetLink) return alert("Primero pega el link de la reunión para incluirlo en el correo.");
+        
+        const subject = encodeURIComponent(`Entrevista: ${candidate.puesto} - Global Talent Connections`);
+        const body = encodeURIComponent(
+`Hola ${candidate.nombre},
+
+Espero que estés muy bien. Te escribo para confirmarte los detalles de nuestra entrevista para la posición de ${candidate.puesto}.
+
+📍 Link de conexión: ${meetLink}
+
+Por favor confírmanos si tienes algún inconveniente con el horario.
+
+Saludos,
+${currentUser || 'Equipo de Selección'}`
+        );
+        
+        window.open(`mailto:${candidate.email}?subject=${subject}&body=${body}`, '_blank');
+    };
+// --- 7. FUNCIÓN ENVIAR FORMULARIO 2 ---
+const handleSendForm2 = () => {
+        // Actualizamos estado visual y base de datos
+        updateChecklist('form2', 'sent');
+        
+        // Preparamos el correo
+        const subject = encodeURIComponent(`Continuación Proceso de Selección - Evaluación Técnica`);
+        const body = encodeURIComponent(
+`Hola ${candidate.nombre},
+
+Gracias por tu tiempo en la entrevista. Para avanzar a la siguiente etapa, necesitamos validar algunas competencias técnicas y conductuales.
+
+Por favor completa este formulario breve:
+👉 [PEGAR AQUÍ TU LINK DE ZOHO FORM 2]
+
+Quedamos atentos a tus respuestas.
+
+Saludos,
+${currentUser || 'Equipo de Selección'}`
+        );
+        
+        // Abrimos cliente de correo
+        window.open(`mailto:${candidate.email}?subject=${subject}&body=${body}`, '_blank');
+    };
+    // 4. Actualizar Checklist
+    const updateChecklist = (field, value) => {
+        if (field === 'form2') setForm2Status(value);
+        if (field === 'result') setFinalResult(value);
+        
+        const payload = {};
+        if (field === 'form2') payload.process_step_2_form = value;
+        if (field === 'result') payload.process_step_3_result = value;
+        onUpdate(candidate.id, payload);
+    };
+
+    // 5. Pasar a Informe (Solo si cumple requisitos)
+    const handleMoveToReport = () => {
+        if (!meetLink || form2Status !== 'received' || finalResult !== 'qualified') {
+            return alert("⚠️ Para avanzar, debes completar: Link de Meet, Formulario Recibido y Calificación Positiva.");
+        }
+        onUpdate(candidate.id, { 
+            stage: 'stage_3', 
+            status_interno: 'ready_for_report'
+        });
+    };
+
+    // Validación visual para habilitar botón
+    const isStage2Complete = meetLink && form2Status === 'received' && finalResult === 'qualified';
+
     return (
         <div className="flex flex-col h-full animate-in slide-in-from-right duration-300 pb-10 max-w-7xl mx-auto px-4 relative">
             
-            {/* --- MODAL DE DESCARTE (POPUP) --- */}
+            {/* --- MODAL DE DESCARTE (INTACTO) --- */}
             {showDiscardModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
                     <div className="bg-slate-900 border border-rose-900/50 rounded-2xl p-6 max-w-md w-full shadow-2xl relative">
@@ -1748,7 +1874,7 @@ function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
                 </div>
             )}
 
-            {/* --- HEADER COMPARTIDO --- */}
+            {/* --- HEADER --- */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                 <div className="flex items-center gap-4">
                     <button onClick={onBack} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors">
@@ -1785,15 +1911,24 @@ function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
                     </div>
 
                     <div className="flex items-center gap-2">
-                        {/* BOTÓN DESCARTAR CONECTADO AL MODAL */}
                         <button onClick={() => setShowDiscardModal(true)} 
                                 className="px-4 py-2 rounded-lg border border-rose-900/50 text-rose-400 hover:bg-rose-900/20 text-sm font-medium transition-colors">
                             Descartar
                         </button>
-                        <button onClick={handleApprove} 
-                                className="px-6 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold transition-all shadow-lg active:scale-95">
-                            Aprobar
-                        </button>
+                        
+                        {/* LÓGICA DE BOTÓN PRINCIPAL SEGÚN ETAPA */}
+                        {candidate.stage === 'stage_1' ? (
+                            <button onClick={handleApprove} 
+                                    className="px-6 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold transition-all shadow-lg active:scale-95">
+                                Aprobar
+                            </button>
+                        ) : (
+                            <button onClick={handleMoveToReport} 
+                                    disabled={!isStage2Complete}
+                                    className={`px-6 py-2 rounded-lg text-sm font-bold transition-all shadow-lg active:scale-95 flex items-center gap-2 ${isStage2Complete ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'}`}>
+                                {isStage2Complete ? <><FileJson size={16}/> Pasar a Informe</> : <><Lock size={16}/> Completar Checklist</>}
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>
@@ -1801,7 +1936,7 @@ function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
             {/* --- CUERPO PRINCIPAL --- */}
             {activeSubTab === 'gestion' ? (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-300">
-                    {/* COLUMNA IZQUIERDA */}
+                    {/* COLUMNA IZQUIERDA (INTACTA) */}
                     <div className="lg:col-span-4 space-y-6">
                         <Card className="p-6 bg-slate-900 border-slate-800">
                             <div className="flex justify-between items-center mb-4">
@@ -1882,6 +2017,175 @@ function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
                                 </div>
                             </div>
                         </Card>
+
+                        {/* 🔥 SECCIÓN DE GESTIÓN (SOLO SI ESTÁ EN ETAPA 2) 🔥 */}
+                        {candidate.stage === 'stage_2' && (
+                            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
+                                
+                                {/* 1. AGENDAR Y TRANSCRIPCIÓN */}
+                                <div className="bg-slate-950 border border-blue-900/30 rounded-xl p-6 shadow-xl">
+                                    <h3 className="text-sm font-bold text-blue-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                        <Calendar size={16}/> 1. Gestión de Entrevista
+                                    </h3>
+                                    
+                                    {/* Link y Email */}
+ {/* BLOQUE NUEVO: BOTONES SEPARADOS (REGISTRAR + ENVIAR) */}
+<div className="grid grid-cols-1 gap-4 mb-6">
+    <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">Link de Meet / Zoom</label>
+    <div className="flex gap-2 w-full">
+        {/* INPUT */}
+        <div className="relative flex-1">
+            <Video className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" size={16}/>
+            <input 
+                type="text" 
+                placeholder="Pegar link de reunión aquí..." 
+                className={`w-full pl-10 pr-4 py-2.5 bg-slate-900 border rounded-lg text-sm text-white focus:outline-none transition-all placeholder-slate-600 ${meetLink && meetLink === candidate.meet_link ? 'border-emerald-500/50 text-emerald-400' : 'border-slate-700 focus:border-blue-500'}`}
+                value={meetLink}
+                onChange={(e) => setMeetLink(e.target.value)}
+            />
+        </div>
+        
+        {/* BOTÓN 1: REGISTRAR (DISKETTE) */}
+        <button 
+            onClick={saveMeetLink}
+            className={`px-4 rounded-lg border transition-all flex items-center justify-center gap-2 font-bold text-xs ${meetLink === candidate.meet_link && meetLink ? 'bg-emerald-900/20 border-emerald-500/50 text-emerald-400' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white'}`}
+            title="Guardar link en la base de datos"
+        >
+            {meetLink === candidate.meet_link && meetLink ? <><CheckCircle size={14}/> GUARDADO</> : <><Save size={14}/> REGISTRAR</>}
+        </button>
+
+        {/* BOTÓN 2: ENVIAR MAIL (SOBRE) */}
+        <button 
+            onClick={handleOpenMail}
+            disabled={!meetLink} 
+            className={`px-4 rounded-lg border transition-all flex items-center justify-center gap-2 font-bold text-xs ${!meetLink ? 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white border-blue-500 shadow-lg'}`}
+            title="Abrir correo con invitación"
+        >
+            <Mail size={14}/> ENVIAR MAIL
+        </button>
+    </div>
+</div>
+
+                                    {/* BLOQUE MEJORADO: TRANSCRIPCIÓN + IA */}
+                                    <div className="border-t border-slate-800 pt-4 mt-4">
+                                        <div className="flex justify-between items-end mb-2">
+                                            <label className="text-[10px] text-slate-500 font-bold uppercase flex items-center gap-2">
+                                                <MessageSquare size={12}/> Transcripción / Notas
+                                            </label>
+                                            
+                                            {/* BOTÓN MÁGICO DE ANÁLISIS */}
+                                            <button 
+                                                onClick={handleAnalyzeInterview}
+                                                disabled={isAnalyzing || !transcript}
+                                                className="text-[10px] bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded border border-purple-400 flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-purple-900/20"
+                                            >
+                                                {isAnalyzing ? <Loader2 size={12} className="animate-spin"/> : <Sparkles size={12}/>}
+                                                {isAnalyzing ? "Analizando..." : "ANALIZAR ENTREVISTA"}
+                                            </button>
+                                        </div>
+                                        
+                                        <textarea 
+                                            className="w-full h-32 bg-slate-900 border border-slate-800 rounded-lg p-4 text-sm text-slate-300 focus:border-purple-500 outline-none resize-none placeholder-slate-600 leading-relaxed custom-scrollbar"
+                                            placeholder="Pega aquí la transcripción o toma notas. Luego presiona 'Analizar' para actualizar el Score."
+                                            value={transcript}
+                                            onChange={(e) => setTranscript(e.target.value)}
+                                            onBlur={saveTranscript} 
+                                        ></textarea>
+                                    </div>
+                                </div>
+
+                                {/* 2. CHECKLIST DE AVANCE (VALIDADOR) */}
+                                {/* 2. SEMÁFORO FORMULARIO 2 + DECISIÓN */}
+                                <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 shadow-xl relative overflow-hidden">
+                                    {/* Decoración lateral según estado */}
+                                    <div className={`absolute top-0 left-0 w-1 h-full transition-colors duration-500 ${
+                                        form2Status === 'received' ? 'bg-emerald-500' : 
+                                        form2Status === 'sent' ? 'bg-amber-500' : 'bg-slate-700'
+                                    }`}></div>
+
+                                    <h3 className="text-sm font-bold text-slate-300 uppercase tracking-widest mb-6 flex items-center gap-2">
+                                        <FileJson size={16}/> 2. Formulario de Validación
+                                    </h3>
+                                    
+                                    <div className="space-y-8">
+                                        {/* SEMÁFORO DE ESTADOS */}
+                                        <div>
+                                            <label className="text-[10px] text-slate-500 font-bold uppercase mb-3 block">Estado del Envío</label>
+                                            <div className="grid grid-cols-3 gap-2 bg-slate-900 p-1 rounded-lg border border-slate-800">
+                                                
+                                                {/* 1. PENDIENTE (GRIS) */}
+                                                <button 
+                                                    onClick={() => updateChecklist('form2', 'pending')}
+                                                    className={`py-2 rounded-md text-[10px] font-bold uppercase transition-all ${
+                                                        form2Status === 'pending' 
+                                                        ? 'bg-slate-700 text-white shadow-md' 
+                                                        : 'text-slate-500 hover:text-slate-300'
+                                                    }`}
+                                                >
+                                                    ⚪ Pendiente
+                                                </button>
+
+                                                {/* 2. ENVIADO (AMARILLO) - CON ACCIÓN DE MAIL */}
+                                                <button 
+                                                    onClick={handleSendForm2}
+                                                    className={`py-2 rounded-md text-[10px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${
+                                                        form2Status === 'sent' 
+                                                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50 shadow-md' 
+                                                        : 'text-slate-500 hover:text-amber-400'
+                                                    }`}
+                                                >
+                                                    {form2Status === 'sent' ? <Mail size={12}/> : <Send size={12}/>}
+                                                    {form2Status === 'sent' ? 'Enviado' : 'Enviar Mail'}
+                                                </button>
+
+                                                {/* 3. RECIBIDO (VERDE) */}
+                                                <button 
+                                                    onClick={() => updateChecklist('form2', 'received')}
+                                                    className={`py-2 rounded-md text-[10px] font-bold uppercase transition-all flex items-center justify-center gap-2 ${
+                                                        form2Status === 'received' 
+                                                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 shadow-md' 
+                                                        : 'text-slate-500 hover:text-emerald-400'
+                                                    }`}
+                                                >
+                                                    {form2Status === 'received' && <CheckCircle size={12}/>}
+                                                    Recibido
+                                                </button>
+                                            </div>
+                                            {form2Status === 'sent' && <p className="text-[9px] text-amber-500/70 mt-1 pl-1">* Esperando respuesta del candidato.</p>}
+                                            {form2Status === 'received' && <p className="text-[9px] text-emerald-500/70 mt-1 pl-1">* Respuestas cargadas correctamente.</p>}
+                                        </div>
+
+                                        {/* DECISIÓN DEL RECLUTADOR (SOLO APARECE SI ESTÁ RECIBIDO O ENVIADO) */}
+                                        <div className={`transition-all duration-500 ${form2Status === 'pending' ? 'opacity-50 pointer-events-none grayscale' : 'opacity-100'}`}>
+                                            <label className="text-[10px] text-slate-500 font-bold uppercase mb-3 block">Decisión Final</label>
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <button 
+                                                    onClick={() => updateChecklist('result', 'qualified')}
+                                                    className={`py-3 rounded-lg border text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                                                        finalResult === 'qualified' 
+                                                        ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg shadow-emerald-900/30 ring-1 ring-emerald-400' 
+                                                        : 'bg-slate-900 text-slate-400 border-slate-700 hover:border-emerald-500/50 hover:text-emerald-400'
+                                                    }`}
+                                                >
+                                                    <ThumbsUp size={16}/> Calificado
+                                                </button>
+                                                <button 
+                                                    onClick={() => updateChecklist('result', 'disqualified')}
+                                                    className={`py-3 rounded-lg border text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                                                        finalResult === 'disqualified' 
+                                                        ? 'bg-rose-600 text-white border-rose-500 shadow-lg shadow-rose-900/30 ring-1 ring-rose-400' 
+                                                        : 'bg-slate-900 text-slate-400 border-slate-700 hover:border-rose-500/50 hover:text-rose-400'
+                                                    }`}
+                                                >
+                                                    <ThumbsDown size={16}/> No Calificado
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         <Card className="bg-slate-900 border-slate-800 flex flex-col overflow-hidden">
                             <div className="p-4 border-b border-slate-800 bg-slate-950/30"><h3 className="text-sm font-bold text-white">Tus Notas Personales</h3></div>
                             <textarea className="w-full h-32 bg-slate-900 p-4 text-slate-300 focus:outline-none placeholder-slate-600 resize-none text-sm" placeholder="Escribe aquí..." value={noteInput} onChange={(e) => setNoteInput(e.target.value)} onBlur={() => onUpdate(candidate.id, { notes: noteInput })}></textarea>
