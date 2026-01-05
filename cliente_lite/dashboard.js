@@ -949,11 +949,17 @@ const ProfessionalReport = ({ data, onBack, onEdit }) => {
         }
 
         const opt = {
-            margin: 0,
+            margin: [10, 10, 10, 10],
             filename: `Informe_${data.nombre.replace(/\s+/g, '_')}.pdf`,
             image: { type: 'jpeg', quality: 0.98 },
-            html2canvas: { scale: 2, useCORS: true },
-            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+            html2canvas: { 
+                scale: 2, 
+                useCORS: true,
+                logging: false,
+                letterRendering: true
+            },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
         };
 
         window.html2pdf().set(opt).from(element).save().then(() => {
@@ -1105,17 +1111,24 @@ const ProfessionalReport = ({ data, onBack, onEdit }) => {
                             </div>
                         </div>
 
-                        {/* 4. HERRAMIENTAS (PILLS MEJORADOS) */}
+                        {/* 4. HERRAMIENTAS (DISEÑO COMPACTO PARA PDF) */}
                         {(data.herramientas && data.herramientas.length > 0) && (
-                            <section>
+                            <section style={{ pageBreakInside: 'avoid', breakInside: 'avoid' }}>
                                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em] mb-4">Stack Tecnológico</h3>
-                                <div className="flex flex-wrap gap-2">
+                                <div 
+                                    className="flex flex-wrap gap-x-4 gap-y-2 items-center"
+                                    style={{ pageBreakInside: 'avoid', breakInside: 'avoid' }}
+                                >
                                     {data.herramientas.map((t, i) => (
-                                        <div key={i} className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg shadow-sm text-xs flex items-center gap-2 whitespace-nowrap">
+                                        <span 
+                                            key={i}
+                                            className="inline-flex items-center gap-1.5 text-xs"
+                                            style={{ pageBreakInside: 'avoid', breakInside: 'avoid', whiteSpace: 'nowrap' }}
+                                        >
                                             <span className="font-bold text-slate-700">{t.herramienta}</span>
-                                            <span className="w-px h-3 bg-slate-200"></span>
+                                            <span className="text-slate-400">|</span>
                                             <span className="text-slate-400 font-medium text-[10px] uppercase">{t.nivel}</span>
-                                        </div>
+                                        </span>
                                     ))}
                                 </div>
                             </section>
@@ -1177,6 +1190,54 @@ function ReportView({ candidates, onUpdate, setCurrentReport }) {
 
     // ⚡ ESTADO NUEVO: Indicador de autoguardado
     const [autoSaveMsg, setAutoSaveMsg] = React.useState("");
+
+    // ⚡ ESTADO PARA CRONOLOGÍA
+    const [selectedCandidateForHistory, setSelectedCandidateForHistory] = React.useState(null);
+
+    // ⚡ FUNCIÓN PARA EXPORTAR CRONOLOGÍA A CSV
+    const handleExportHistory = () => {
+        if (!selectedCandidateForHistory || !selectedCandidateForHistory.history || selectedCandidateForHistory.history.length === 0) {
+            alert("No hay datos para exportar.");
+            return;
+        }
+
+        const candidate = selectedCandidateForHistory;
+        
+        // Encabezados del CSV
+        const headers = ['Nombre', 'Email', 'Puesto', 'Fecha y Hora', 'Evento', 'Detalles', 'Usuario'];
+        
+        // Convertir historial a filas CSV
+        const rows = candidate.history.map(h => {
+            const fecha = h.date ? new Date(h.date).toLocaleString('es-AR') : 'Fecha desconocida';
+            return [
+                candidate.nombre || 'Sin nombre',
+                candidate.email || 'S/E',
+                candidate.puesto || 'Sin puesto',
+                fecha,
+                h.event || 'Evento del sistema',
+                (h.detail || 'Sin detalles adicionales.').replace(/"/g, '""'), // Escapar comillas
+                h.usuario || 'Sistema'
+            ];
+        });
+        
+        // Crear contenido CSV
+        const csvContent = [
+            headers.join(','),
+            ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+        ].join('\n');
+        
+        // Crear blob y descargar
+        const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' }); // BOM para Excel
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const safeName = (candidate.nombre || 'Candidato').replace(/[^a-zA-Z0-9 ]/g, "").replace(/\s+/g, "_");
+        a.download = `Cronologia_${safeName}_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    };
 
     // Filtrar candidatos listos (Etapa 3)
     const pipelineCandidates = candidates.filter(c => c.stage === 'stage_3');
@@ -1512,7 +1573,72 @@ function ReportView({ candidates, onUpdate, setCurrentReport }) {
     }
 
     // =========================================================
-    // RENDER: 3. LISTA PIPELINE Y CARGA MANUAL (DEFAULT)
+    // RENDER: 3. VISTA CRONOLOGÍA (MODAL)
+    // =========================================================
+    if (selectedCandidateForHistory) {
+        return (
+            <div className="max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-300">
+                <div className="mb-6 flex items-center justify-between">
+                    <div>
+                        <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                            <History size={20}/> Cronología de Movimientos
+                        </h2>
+                        <p className="text-slate-400 text-sm mt-1">
+                            {selectedCandidateForHistory.nombre} - {selectedCandidateForHistory.puesto || "Candidato"}
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        {selectedCandidateForHistory.history && selectedCandidateForHistory.history.length > 0 && (
+                            <button 
+                                onClick={handleExportHistory}
+                                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg transition-colors flex items-center gap-2"
+                            >
+                                <Download size={16}/> Exportar CSV
+                            </button>
+                        )}
+                        <button 
+                            onClick={() => setSelectedCandidateForHistory(null)}
+                            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-sm font-bold rounded-lg transition-colors"
+                        >
+                            Volver
+                        </button>
+                    </div>
+                </div>
+
+                <Card className="bg-slate-900 border-slate-800 p-8">
+                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-6 flex items-center gap-2">
+                        <History size={16}/> Historial de Movimientos
+                    </h3>
+                    
+                    {!selectedCandidateForHistory.history || selectedCandidateForHistory.history.length === 0 ? (
+                        <div className="text-center py-10 border-2 border-dashed border-slate-800 rounded-xl">
+                            <p className="text-slate-500 text-sm">No hay movimientos registrados aún.</p>
+                        </div>
+                    ) : (
+                        <div className="relative border-l-2 border-slate-800 ml-3 space-y-8 pl-8 py-2">
+                            {selectedCandidateForHistory.history.map((h, idx) => (
+                                <div key={idx} className="relative group">
+                                    <div className="absolute -left-[39px] top-1 w-5 h-5 rounded-full bg-slate-900 border-2 border-blue-500 z-10 group-hover:scale-125 transition-transform shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div>
+                                    <div className="flex flex-col gap-1">
+                                        <span className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">
+                                            {h.date ? new Date(h.date).toLocaleString('es-AR') : 'Fecha desconocida'}
+                                        </span>
+                                        <h4 className="text-white font-bold text-sm">{h.event || 'Evento del sistema'}</h4>
+                                        <p className="text-xs text-slate-400 bg-slate-950/50 p-2 rounded border border-slate-800 inline-block mt-1">
+                                            {h.detail || 'Sin detalles adicionales.'}
+                                        </p>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </Card>
+            </div>
+        );
+    }
+
+    // =========================================================
+    // RENDER: 4. LISTA PIPELINE Y CARGA MANUAL (DEFAULT)
     // =========================================================
     return (
         <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in duration-500 pb-20">
@@ -1627,6 +1753,12 @@ function ReportView({ candidates, onUpdate, setCurrentReport }) {
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-3">
+                                    <button 
+                                        onClick={() => setSelectedCandidateForHistory(c)}
+                                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-2"
+                                    >
+                                        <History size={14}/> Ver Cronología
+                                    </button>
                                     {c.informe_final_data ? (
                                         <button 
                                             onClick={() => handleOpenCandidate(c)}
@@ -2414,7 +2546,7 @@ function App() {
     const [currentUser, setCurrentUser] = useState(null);
     const [showManualModal, setShowManualModal] = useState(false); 
 
-    const LOGO_URL = "./GLOBAL.jpg";
+    const LOGO_URL = "/GLOBAL.jpg";
 
     // 2. FUNCIÓN DE CARGA
     const cargarDatos = async (forceRefresh = false) => {
@@ -2532,8 +2664,8 @@ const handleUpdateCandidate = async (id, updates) => {
         <>
             <div className="flex h-screen bg-slate-950 font-sans text-slate-200 selection:bg-blue-500/30 overflow-hidden">
                 <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-20">
-                    <div className="h-24 flex items-center justify-center px-6 border-b border-slate-800">
-                        <img src={LOGO_URL} alt="Logo" className="h-20 w-auto object-contain mix-blend-screen opacity-90 transition-all hover:scale-105" />
+                    <div className="h-24 flex items-center justify-center px-6 border-b border-slate-800 bg-slate-900">
+                        <img src={LOGO_URL} alt="Logo" className="max-h-20 w-auto object-contain transition-all hover:scale-105" />
                     </div>
                     <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto custom-scrollbar">
                         {menuItems.map((item, idx) => {
