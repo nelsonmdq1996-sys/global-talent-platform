@@ -10,6 +10,31 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth, GoogleAuthProvider, signInWithPopup } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        
+        // Cargar configuración desde el backend
+        fetch('/firebase-config')
+            .then(res => res.json())
+            .then(config => {
+                if (config.apiKey) {
+                    const app = initializeApp(config);
+                    const auth = getAuth(app);
+                    const provider = new GoogleAuthProvider();
+                    
+                    window.firebaseAuth = auth;
+                    window.firebaseGoogleProvider = provider;
+                    window.firebaseSignInWithPopup = signInWithPopup;
+                    
+                    console.log('✅ Firebase Auth inicializado');
+                } else {
+                    console.warn('⚠️ Firebase config no disponible. La autenticación no funcionará.');
+                }
+            })
+            .catch(err => console.error('❌ Error cargando Firebase config:', err));
+    </script>
     
     <script>
         tailwind.config = {

@@ -547,45 +547,196 @@
             );
         }
         // --- VISTA DE CARGA MANUAL ---
-        function ManualUploadModal({ isOpen, onClose, onUploadSuccess }) {
+        function ManualUploadModal({ isOpen, onClose, onUploadSuccess, currentUser }) {
     const [loading, setLoading] = React.useState(false);
     const [file, setFile] = React.useState(null);
+    const [step, setStep] = React.useState(1); // 1 = analizar, 2 = confirmar
+    const [puesto, setPuesto] = React.useState("");
+    const [nombreExtraido, setNombreExtraido] = React.useState("");
+    const [emailExtraido, setEmailExtraido] = React.useState("");
+    
+    // Lista de puestos disponibles
+    const puestosDisponibles = [
+        "Asistente Administrativo Inteligente",
+        "Asistente de Arquitectura",
+        "Asistente de Comunicacion Corporativa",
+        "Asistente Financiero y Contable",
+        "Asistente de Marketing Digital",
+        "Asistente para E commerce",
+        "Asistente para Desarrollo Web",
+        "Asistente de Diseño Grafico",
+        "Asistente de Automatizacion con IA",
+        "Asistente de Gestion y Calidad",
+        "Asistende de Recursos Humanos",
+        "Asistente de Gestion de Procesos",
+        "Asistente Diseñador/a de Productos e Interiores",
+        "Asistente Técnico/a de Proyectos Acústicos",
+        "Asistente de Atención al Cliente",
+        "Asistente de Ventas y Prospección",
+        "Asistente de Soporte Técnico/TI",
+        "Asistente Valoración Inmobiliaria y Tasación",
+        "Asistente Diseñador UX/UI",
+        "Aistente Desarrollador/a Senior - Magnolia CMS",
+        "Asistente Delineante técnico",
+        "Asistente Ingeniero/a de Caminos",
+        "Asistente de Gestion de Proyectos",
+        "Asistente Virtual Ejecutiva",
+        "Asistente Project Manager",
+        "Asistente de Marketing con Elementor",
+        "Asistente Especialista en Calidad con Power BI",
+        "Asistente Ingeniero Mecatrónico/Automatización",
+        "Asistente en Estrategia y Operaciones",
+        "Asistente Financiero",
+        "Asistente Desarrollador/a de Automatizaciones Zoho",
+        "Asistente Aparejador / Arquitecto Técnico",
+        "Asistente Comercial - Remodelariones, Reformas y Construcción",
+        "Asistente Desarrollador Odoo + Shopify",
+        "Asistente Programador web (Power BI + Integración ERP/CRM",
+        "Asistente de Seguridad y Salud Laboral",
+       
+    ];
+    
     if (!isOpen) return null;
 
-    const handleSubmit = async (e) => {
+    // Paso 1: Analizar CV con IA
+    const handleAnalizar = async (e) => {
         e.preventDefault();
+        if (!file || !puesto) {
+            alert("❌ Por favor selecciona un puesto y sube el CV");
+            return;
+        }
+        
         setLoading(true);
-        const formData = new FormData(e.target);
-        if (file) formData.append('cv', file);
+        const formData = new FormData();
+        formData.append('cv', file);
+        
+        const result = await api.candidates.analizarCV(formData);
+        if (result.ok) {
+            setNombreExtraido(result.nombre || "");
+            setEmailExtraido(result.email || "");
+            setStep(2); // Pasar al paso 2
+        } else {
+            alert("❌ Error al analizar CV: " + (result.error || "No se pudo analizar"));
+        }
+        setLoading(false);
+    };
+
+    // Paso 2: Confirmar y crear candidato
+    const handleConfirmar = async (e) => {
+        e.preventDefault();
+        if (!emailExtraido.trim()) {
+            alert("❌ El email es obligatorio");
+            return;
+        }
+        
+        setLoading(true);
+        const formData = new FormData();
+        formData.append('cv', file);
+        formData.append('puesto', puesto);
+        formData.append('nombre', nombreExtraido);
+        formData.append('email', emailExtraido.trim());
+        formData.append('usuario_accion', currentUser || 'Sistema');
+        
         const result = await api.candidates.manualUpload(formData);
         if (result.ok || result.id) {
-            alert("✅ Candidato cargado con éxito. Iniciando análisis IA...");
+            alert("✅ Candidato cargado con éxito");
             onUploadSuccess();
             onClose();
+            // Resetear estado
+            setStep(1);
+            setFile(null);
+            setPuesto("");
+            setNombreExtraido("");
+            setEmailExtraido("");
         } else {
             alert("❌ Error: " + (result.error || "No se pudo subir"));
         }
         setLoading(false);
     };
 
+    const handleCancelar = () => {
+        // Resetear estado al cancelar
+        setStep(1);
+        setFile(null);
+        setPuesto("");
+        setNombreExtraido("");
+        setEmailExtraido("");
+        onClose();
+    };
+
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
             <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md shadow-2xl animate-in zoom-in duration-200">
                 <h2 className="text-xl font-bold text-white mb-4">Carga Manual de Candidato</h2>
-                <form onSubmit={handleSubmit} className="space-y-4">
-                    <input name="nombre" required className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-sm outline-none focus:border-blue-500" placeholder="Nombre Completo" />
-                    <input name="email" type="email" required className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-sm outline-none focus:border-blue-500" placeholder="Email" />
-                    <input name="puesto" required className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-sm outline-none focus:border-blue-500" placeholder="Puesto Objetivo" />
-                    <div className="border-2 border-dashed border-slate-800 rounded-xl p-4 text-center">
-                        <input type="file" accept=".pdf" required onChange={e => setFile(e.target.files[0])} className="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500" />
-                    </div>
-                    <div className="flex gap-3 mt-6">
-                        <button type="button" onClick={onClose} className="flex-1 px-4 py-2 bg-slate-800 text-slate-400 rounded-lg text-sm font-bold">Cancelar</button>
-                        <button type="submit" disabled={loading} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold disabled:opacity-50">
-                            {loading ? "Analizando..." : "Subir y Analizar"}
-                        </button>
-                    </div>
-                </form>
+                
+                {step === 1 ? (
+                    // PASO 1: Seleccionar puesto y subir CV
+                    <form onSubmit={handleAnalizar} className="space-y-4">
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-2">Puesto Objetivo</label>
+                            <select 
+                                value={puesto} 
+                                onChange={e => setPuesto(e.target.value)}
+                                required
+                                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-sm outline-none focus:border-blue-500"
+                            >
+                                <option value="">Selecciona un puesto...</option>
+                                {puestosDisponibles.map((p, idx) => (
+                                    <option key={idx} value={p}>{p}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="border-2 border-dashed border-slate-800 rounded-xl p-4 text-center">
+                            <input 
+                                type="file" 
+                                accept=".pdf" 
+                                required 
+                                onChange={e => setFile(e.target.files[0])} 
+                                className="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500" 
+                            />
+                        </div>
+                        <div className="flex gap-3 mt-6">
+                            <button type="button" onClick={handleCancelar} className="flex-1 px-4 py-2 bg-slate-800 text-slate-400 rounded-lg text-sm font-bold">Cancelar</button>
+                            <button type="submit" disabled={loading} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold disabled:opacity-50">
+                                {loading ? "Extrayendo datos..." : "Extraer datos"}
+                            </button>
+                        </div>
+                    </form>
+                ) : (
+                    // PASO 2: Mostrar datos extraídos y confirmar
+                    <form onSubmit={handleConfirmar} className="space-y-4">
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-2">Nombre Completo</label>
+                            <input 
+                                type="text" 
+                                value={nombreExtraido} 
+                                onChange={e => setNombreExtraido(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-sm outline-none focus:border-blue-500" 
+                                placeholder="Nombre Completo"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-2">Email <span className="text-yellow-400">* Este es el ID del candidato, presta atención</span></label>
+                            <input 
+                                type="email" 
+                                value={emailExtraido} 
+                                onChange={e => setEmailExtraido(e.target.value)}
+                                required
+                                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-sm outline-none focus:border-blue-500" 
+                                placeholder="Email"
+                            />
+                        </div>
+                        <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-xs text-blue-400">
+                            <strong>Puesto seleccionado:</strong> {puesto}
+                        </div>
+                        <div className="flex gap-3 mt-6">
+                            <button type="button" onClick={() => setStep(1)} className="flex-1 px-4 py-2 bg-slate-800 text-slate-400 rounded-lg text-sm font-bold">Volver</button>
+                            <button type="submit" disabled={loading} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold disabled:opacity-50">
+                                {loading ? "Creando..." : "Confirmar y Crear"}
+                            </button>
+                        </div>
+                    </form>
+                )}
             </div>
         </div>
     );
@@ -693,7 +844,12 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
                     Array(6).fill(0).map((_, i) => <SkeletonCard key={i} />)
                 ) : (
                     /* 2. Cuando termina de cargar, mostramos los datos reales */
-                    filtered.map(c => (
+                    filtered.map(c => {
+                        // Debug temporal: verificar origen
+                        if (c.origen) {
+                            console.log(`Candidato ${c.nombre} - origen:`, c.origen);
+                        }
+                        return (
                         <div 
                             key={c.id} 
                             onClick={() => onSelect(c.id)} 
@@ -715,17 +871,24 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
                                 </div>
                             </div>
 
-                            {/* BODY: NOMBRE + ETIQUETA NUEVO */}
+                            {/* BODY: NOMBRE + ETIQUETAS */}
                             <div className="mb-6">
                                 <h3 className="text-lg font-bold text-white group-hover:text-blue-100 transition-colors mb-2">
                                     {c.nombre || "Sin Nombre"}
                                 </h3>
-                                {/* Etiqueta "NUEVO" animada */}
-                                {isToday(c.fecha) && c.status_interno === 'new' && (
-                                    <span className="inline-block px-2 py-0.5 bg-blue-600 text-white text-[10px] font-bold rounded shadow-sm animate-pulse">
-                                        NUEVO
-                                    </span>
-                                )}
+                                {/* Etiquetas: NUEVO y CARGA MANUAL */}
+                                <div className="flex gap-2 flex-wrap">
+                                    {isToday(c.fecha) && c.status_interno === 'new' && (
+                                        <span className="inline-block px-2 py-0.5 bg-blue-600 text-white text-[10px] font-bold rounded shadow-sm animate-pulse">
+                                            NUEVO
+                                        </span>
+                                    )}
+                                    {(c.origen === "carga_manual" || c.origen === "manual") && (
+                                        <span className="inline-block px-2 py-0.5 bg-purple-600 text-white text-[10px] font-bold rounded shadow-sm">
+                                            CARGA MANUAL
+                                        </span>
+                                    )}
+                                </div>
                             </div>
 
                             {/* FOOTER: FECHA */}
@@ -735,7 +898,8 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
                                 </span>
                             </div>
                         </div>
-                    ))
+                        );
+                    })
                 )}
             </div>
         </div>
@@ -1790,7 +1954,9 @@ function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
     const [newCvLink, setNewCvLink] = useState(candidate.cv_url || "");
     const [newVideoLink, setNewVideoLink] = useState(candidate.video_url || "");
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [isAnalyzingVideo, setIsAnalyzingVideo] = useState(false);
     const [activeSubTab, setActiveSubTab] = useState('gestion');
+    const [showResenaCV, setShowResenaCV] = useState(false);
 
     // ESTADOS PARA EL MODAL DE DESCARTE (TU CÓDIGO ORIGINAL)
     const [showDiscardModal, setShowDiscardModal] = useState(false);
@@ -1830,9 +1996,74 @@ function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
         : ['Sin datos técnicos'];
 
     // --- ACCIONES EXISTENTES ---
-    const saveLinks = () => {
-        onUpdate(candidate.id, { cv_url: newCvLink, video_url: newVideoLink });
+    const saveLinks = async () => {
+        // Si se está agregando o cambiando el video, activar loader
+        const videoCambio = newVideoLink && newVideoLink !== candidate.video_url;
+        
+        if (videoCambio) {
+            setIsAnalyzingVideo(true);
+        }
+        
+        // Guardar los links
+        await onUpdate(candidate.id, { 
+            cv_url: newCvLink, 
+            video_url: newVideoLink,
+            usuario_accion: currentUser || 'Sistema'
+        });
         setIsEditing(false);
+        
+        // Si hay video, esperar a que termine el análisis y refrescar datos
+        if (videoCambio) {
+            // Esperar un tiempo razonable para que el backend procese el video
+            // Hacemos polling cada 2 segundos para ver si el score cambió
+            let intentos = 0;
+            const maxIntentos = 15; // 30 segundos máximo (15 * 2s)
+            const scoreInicial = candidate.ia_score || 0;
+            
+            const checkVideoAnalysis = setInterval(async () => {
+                intentos++;
+                
+                try {
+                    // Recargar datos del candidato desde la API
+                    const apiClient = window.api || api;
+                    const lista = await apiClient.candidates.list();
+                    const candidatoActualizado = lista.find(c => c.id === candidate.id);
+                    
+                    if (candidatoActualizado) {
+                        // Verificar si el score cambió o si hay reseña_video
+                        const scoreNuevo = candidatoActualizado.ia_score || 0;
+                        const tieneResenaVideo = candidatoActualizado.reseña_video || candidatoActualizado.reseñaVideo;
+                        
+                        // Si el score cambió o hay reseña de video, el análisis terminó
+                        if (scoreNuevo !== scoreInicial || tieneResenaVideo || intentos >= maxIntentos) {
+                            clearInterval(checkVideoAnalysis);
+                            setIsAnalyzingVideo(false);
+                            
+                            // Actualizar el candidato en el estado
+                            onUpdate(candidate.id, {
+                                ia_score: candidatoActualizado.ia_score,
+                                ia_motivos: candidatoActualizado.ia_motivos,
+                                reseña_video: candidatoActualizado.reseña_video || candidatoActualizado.reseñaVideo,
+                                video_url: candidatoActualizado.video_url
+                            });
+                            
+                            if (intentos >= maxIntentos) {
+                                alert("⚠️ El análisis del video está tomando más tiempo del esperado. Los datos se actualizarán automáticamente cuando termine.");
+                            } else {
+                                // Mostrar mensaje de éxito
+                                console.log(`✅ Video analizado. Score: ${scoreInicial} → ${scoreNuevo}`);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error("Error verificando análisis de video:", error);
+                    if (intentos >= maxIntentos) {
+                        clearInterval(checkVideoAnalysis);
+                        setIsAnalyzingVideo(false);
+                    }
+                }
+            }, 2000); // Verificar cada 2 segundos
+        }
     };
 
     const handleApprove = () => {
@@ -1916,7 +2147,7 @@ function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
 
 
   // 1. ABRIR GMAIL PARA LA ENTREVISTA (MEET)
-  const handleOpenMail = () => {
+  const handleOpenMail = async () => {
     // Usar el link guardado o el del estado local
     const linkToUse = candidate.meet_link || meetLink;
     if (!linkToUse) return alert("⚠️ Primero pega el link de la reunión en el campo de texto para incluirlo en el correo.");
@@ -1958,6 +2189,16 @@ Equipo de Selección | Global Talent Connections`
     // Abrir Gmail en pestaña nueva
     const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${recipient}&su=${subject}&body=${body}`;
     window.open(gmailUrl, '_blank');
+    
+    // Registrar evento en la cronología
+    try {
+        await onUpdate(candidate.id, {
+            mail_meet_enviado: true,
+            usuario_accion: currentUser || 'Sistema'
+        });
+    } catch (error) {
+        console.error("Error registrando evento de mail:", error);
+    }
 };
 
 
@@ -2171,25 +2412,49 @@ Equipo de Selección | Global Talent Connections`
                                             <label className="text-[10px] text-purple-400 font-bold uppercase mb-1 block">Link Video:</label>
                                             <input type="text" value={newVideoLink} onChange={(e) => setNewVideoLink(e.target.value)} placeholder="https://..." className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white outline-none focus:border-purple-500" />
                                         </div>
-                                        <button onClick={saveLinks} className="w-full bg-emerald-600 text-white py-1.5 rounded text-xs font-bold hover:bg-emerald-500">💾 GUARDAR CAMBIOS</button>
+                                        <button 
+                                            onClick={saveLinks} 
+                                            disabled={isAnalyzingVideo}
+                                            className="w-full bg-emerald-600 text-white py-1.5 rounded text-xs font-bold hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                        >
+                                            {isAnalyzingVideo ? (
+                                                <Loader2 size={14} className="animate-spin"/>
+                                            ) : (
+                                                <>💾 GUARDAR CAMBIOS</>
+                                            )}
+                                        </button>
                                     </div>
                                 )}
-                                <a href={candidate.cv_url} target="_blank" className="flex items-center gap-4 p-4 rounded-xl border border-slate-800 bg-slate-950 hover:border-blue-500/50 hover:bg-slate-900 transition-all group cursor-pointer">
-                                    <div className="w-10 h-10 rounded-full bg-blue-600/20 flex items-center justify-center text-blue-500 group-hover:scale-110 transition-transform"><FileText size={20}/></div>
-                                    <div><h4 className="text-sm font-bold text-white">Curriculum Vitae</h4><p className="text-xs text-blue-400 group-hover:underline">{candidate.cv_url && candidate.cv_url.length > 5 ? "Ver Documento" : "Link no disponible"}</p></div>
-                                </a>
-                                <a href={candidate.video_url && candidate.video_url.startsWith('http') ? candidate.video_url : "#"} target="_blank" className={`flex items-center gap-4 p-4 rounded-xl border border-slate-800 bg-slate-950 transition-all group ${!candidate.video_url || !candidate.video_url.startsWith('http') ? 'opacity-50 cursor-not-allowed' : 'hover:border-purple-500/50 hover:bg-slate-900 cursor-pointer'}`}>
-                                    <div className="w-10 h-10 rounded-full bg-purple-600/20 flex items-center justify-center text-purple-500 group-hover:scale-110 transition-transform"><Video size={20}/></div>
-                                    <div>
-                                        <h4 className="text-sm font-bold text-white">Video Presentación</h4>
+                                <div className="flex items-center gap-4 p-4 rounded-xl border border-slate-800 bg-slate-950 hover:border-blue-500/50 hover:bg-slate-900 transition-all group">
+                                    <a href={candidate.cv_url} target="_blank" className="flex items-center gap-4 flex-1 cursor-pointer">
+                                        <div className="w-10 h-10 rounded-full bg-blue-600/20 flex items-center justify-center text-blue-500 group-hover:scale-110 transition-transform"><FileText size={20}/></div>
+                                        <div className="flex-1"><h4 className="text-sm font-bold text-white">Curriculum Vitae</h4><p className="text-xs text-blue-500 group-hover:underline">{candidate.cv_url && candidate.cv_url.length > 5 ? "Ver Documento" : "Link no disponible"}</p></div>
+                                    </a>
+                                </div>
+                                <div className={`flex items-center gap-4 p-4 rounded-xl border border-slate-800 bg-slate-950 transition-all group ${!candidate.video_url || !candidate.video_url.startsWith('http') ? 'opacity-50' : ''} ${isAnalyzingVideo ? 'border-purple-500/50 bg-purple-500/5' : ''}`}>
+                                    <div className="w-10 h-10 rounded-full bg-purple-600/20 flex items-center justify-center text-purple-500 group-hover:scale-110 transition-transform">
+                                        {isAnalyzingVideo ? <Loader2 size={20} className="animate-spin"/> : <Video size={20}/>}
+                                    </div>
+                                    <div className="flex-1">
+                                        <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                                            Video Presentación
+                                            {isAnalyzingVideo && (
+                                                <span className="text-[10px] bg-purple-600/20 text-purple-400 px-2 py-0.5 rounded border border-purple-500/30 animate-pulse">
+                                                    Analizando...
+                                                </span>
+                                            )}
+                                        </h4>
                                         <p className="text-xs text-purple-400 group-hover:underline">
-                                            {!candidate.video_url ? 'No disponible' : 
-                                             candidate.video_url.startsWith('http') ? 'Abrir Link Externo' : 
+                                            {isAnalyzingVideo ? 'Procesando video con IA...' :
+                                             !candidate.video_url ? 'No disponible' : 
+                                             candidate.video_url.startsWith('http') ? (
+                                                 <a href={candidate.video_url} target="_blank" className="hover:underline">Abrir Link Externo</a>
+                                             ) : 
                                              candidate.video_tipo === 'archivo' ? 'Video subido (ver en Zoho)' : 
                                              'Link no válido'}
                                         </p>
                                     </div>
-                                </a>
+                                </div>
                             </div>
                         </Card>
                     </div>
@@ -2221,15 +2486,15 @@ Equipo de Selección | Global Talent Connections`
                         </Card>
 
                         {/* 🔥 SECCIÓN DE RESEÑAS (CV Y VIDEO) 🔥 */}
-                        {(candidate.reseña_cv || candidate.reseña_video) && (
+                        {(candidate.reseña_cv || candidate.reseña_video || (candidate.transcripcion_entrevista && candidate.ia_motivos)) && (
                             <Card className="p-6 bg-slate-900 border-slate-800">
                                 <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                                    <FileText className="text-cyan-400" size={18} /> Reseñas Generadas por IA
+                                    <FileText className="text-blue-500" size={18} /> Reseñas Generadas por IA
                                 </h2>
                                 <div className="space-y-4">
                                     {candidate.reseña_cv && (
                                         <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
-                                            <h3 className="text-xs font-bold text-cyan-400 uppercase tracking-widest mb-2 flex items-center gap-2">
+                                            <h3 className="text-xs font-bold text-blue-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                                                 <FileText size={14} /> Reseña del CV
                                             </h3>
                                             <p className="text-sm text-slate-300 leading-relaxed">{candidate.reseña_cv}</p>
@@ -2241,6 +2506,14 @@ Equipo de Selección | Global Talent Connections`
                                                 <Video size={14} /> Reseña del Video de Presentación
                                             </h3>
                                             <p className="text-sm text-slate-300 leading-relaxed">{candidate.reseña_video}</p>
+                                        </div>
+                                    )}
+                                    {candidate.transcripcion_entrevista && candidate.ia_motivos && (
+                                        <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
+                                            <h3 className="text-xs font-bold text-emerald-500 uppercase tracking-widest mb-2 flex items-center gap-2">
+                                                <MessageSquare size={14} /> Análisis de la Transcripción
+                                            </h3>
+                                            <p className="text-sm text-slate-300 leading-relaxed">{candidate.ia_motivos}</p>
                                         </div>
                                     )}
                                     {candidate.video_error && (
@@ -2483,12 +2756,35 @@ Equipo de Selección | Global Talent Connections`
                    </Card>
                </div>
            )}
+           
+           {/* Modal de Reseña del CV */}
+           {showResenaCV && candidate.reseña_cv && (
+               <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowResenaCV(false)}>
+                   <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-2xl shadow-2xl animate-in zoom-in duration-200" onClick={(e) => e.stopPropagation()}>
+                       <div className="flex items-center justify-between mb-4">
+                           <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                               <FileText className="text-blue-500" size={18} /> Reseña del CV
+                           </h3>
+                           <button 
+                               onClick={() => setShowResenaCV(false)} 
+                               className="text-slate-400 hover:text-white transition-colors text-xl leading-none"
+                           >
+                               ✕
+                           </button>
+                       </div>
+                       <div className="bg-slate-950/50 rounded-xl p-4 border border-slate-800">
+                           <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">{candidate.reseña_cv}</p>
+                       </div>
+                   </div>
+               </div>
+           )}
        </div>
    );
 }
 
 // --- COMPONENTE LOGIN (PORTERÍA DE ACCESO) ---
 const LoginView = ({ onLogin }) => {
+    const [isAuthenticating, setIsAuthenticating] = useState(false);
     const team = [
         { name: "Gladymar", role: "Recursos Humanos" },
         { name: "Sandra", role: "Recursos Humanos" },
@@ -2498,6 +2794,37 @@ const LoginView = ({ onLogin }) => {
         { name: "Daniel (CEO)", role: "Dirección" },
         { name: "Admin", role: "Superusuario" }
     ];
+    
+    const handleLogin = async (userName) => {
+        setIsAuthenticating(true);
+        
+        try {
+            // Intentar autenticación con Firebase si está disponible
+            if (window.firebaseAuth && window.firebaseGoogleProvider && window.firebaseSignInWithPopup) {
+                try {
+                    const result = await window.firebaseSignInWithPopup(window.firebaseAuth, window.firebaseGoogleProvider);
+                    const token = await result.user.getIdToken();
+                    
+                    // Guardar token en localStorage
+                    localStorage.setItem('firebase_token', token);
+                    localStorage.setItem('firebase_token_expires', (Date.now() + 3600000).toString()); // 1 hora
+                    
+                    console.log('✅ Autenticación exitosa con Firebase');
+                } catch (authError) {
+                    console.warn('⚠️ Error en autenticación Firebase, continuando sin token:', authError);
+                    // Continuar sin token si falla la autenticación
+                }
+            } else {
+                console.warn('⚠️ Firebase Auth no disponible, continuando sin autenticación');
+            }
+        } catch (error) {
+            console.error('❌ Error en proceso de login:', error);
+        } finally {
+            setIsAuthenticating(false);
+            // Siempre llamar a onLogin con el nombre (mantiene compatibilidad)
+            onLogin(userName);
+        }
+    };
     
     return (
         <div className="min-h-screen flex items-center justify-center bg-slate-950 relative overflow-hidden">
@@ -2510,11 +2837,17 @@ const LoginView = ({ onLogin }) => {
 
                 <div className="space-y-3">
                     <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] text-center mb-4">Seleccioná tu perfil de acceso</p>
+                    {isAuthenticating && (
+                        <div className="text-center py-2 mb-2">
+                            <p className="text-xs text-blue-400">Autenticando con Google...</p>
+                        </div>
+                    )}
                     {team.map(user => (
                         <button 
                             key={user.name}
-                            onClick={() => onLogin(user.name)}
-                            className="w-full p-4 rounded-xl bg-slate-800 hover:bg-blue-600 border border-slate-700 hover:border-blue-500 transition-all group flex items-center justify-between"
+                            onClick={() => handleLogin(user.name)}
+                            disabled={isAuthenticating}
+                            className="w-full p-4 rounded-xl bg-slate-800 hover:bg-blue-600 border border-slate-700 hover:border-blue-500 transition-all group flex items-center justify-between disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-full bg-slate-700 group-hover:bg-white/20 flex items-center justify-center text-white font-bold text-sm shadow-inner">
@@ -2546,7 +2879,7 @@ function App() {
     const [currentUser, setCurrentUser] = useState(null);
     const [showManualModal, setShowManualModal] = useState(false); 
 
-    const LOGO_URL = "/GLOBAL.jpg";
+    const LOGO_URL = "/GLOBAL.png";
 
     // 2. FUNCIÓN DE CARGA
     const cargarDatos = async (forceRefresh = false) => {
@@ -2704,7 +3037,8 @@ const handleUpdateCandidate = async (id, updates) => {
             <ManualUploadModal 
                 isOpen={showManualModal} 
                 onClose={() => setShowManualModal(false)} 
-                onUploadSuccess={() => cargarDatos(true)} 
+                onUploadSuccess={() => cargarDatos(true)}
+                currentUser={currentUser}
             />
         </>
     );

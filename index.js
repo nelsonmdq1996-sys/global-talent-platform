@@ -153,8 +153,12 @@ app.use(
             "https://cv-cladificador-eyvb.onrender.com", 
             "https://cv-cladificador.onrender.com",
             "https://unpkg.com",
-            "https://generativelanguage.googleapis.com"
+            "https://generativelanguage.googleapis.com",
+            "https://www.gstatic.com",
+            "https://identitytoolkit.googleapis.com",
+            "https://securetoken.googleapis.com"
         ],
+        "script-src": ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.tailwindcss.com", "https://unpkg.com", "https://www.gstatic.com"],
       },
     },
   })
@@ -436,6 +440,66 @@ Devuélveme ÚNICAMENTE un JSON válido con esta estructura EXACTA:
   }
 }
 
+
+//////////////////////// extraerNombreYEmailDelCV (usando Gemini) /////////////////
+
+async function extraerNombreYEmailDelCV(textoCV) {
+  const prompt = `
+Eres un asistente experto en análisis de CVs. Tu tarea es extraer ÚNICAMENTE el nombre completo y el email del candidato del siguiente texto de CV.
+
+INSTRUCCIONES:
+- Extrae el NOMBRE COMPLETO del candidato (generalmente aparece al inicio del CV o en la sección de datos personales).
+- Extrae el EMAIL del candidato (busca patrones como nombre@dominio.com).
+- Si no encuentras alguno de estos datos, devuelve una cadena vacía "" para ese campo.
+- NO inventes información. Solo usa lo que está explícitamente en el texto.
+- Devuelve ÚNICAMENTE un JSON válido con esta estructura exacta:
+{
+  "nombre": "",
+  "email": ""
+}
+
+==========================
+TEXTO DEL CV:
+==========================
+${textoCV.slice(0, 5000)}
+`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    let raw = result?.response?.text() || "{}";
+    // Limpiar posibles marcas de código
+    raw = raw.trim()
+      .replace(/^```json/i, "")
+      .replace(/^```/, "")
+      .replace(/```$/i, "")
+      .replace(/^\s*[\r\n]+/, "")
+      .replace(/[\r\n]+```$/, "");
+    const json = JSON.parse(raw);
+    
+    // Validar que sean strings y limpiar
+    const nombre = (json.nombre || "").trim();
+    const email = (json.email || "").trim().toLowerCase();
+    
+    // Validación básica de email
+    const emailValido = email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/) ? email : "";
+    
+    return {
+      nombre: nombre || "",
+      email: emailValido || ""
+    };
+  } catch (e) {
+    console.error("⚠️ Error en extraerNombreYEmailDelCV (Gemini):", e.message);
+    // Fallback: intentar extraer email con regex básico
+    const emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/gi;
+    const emailsEncontrados = textoCV.match(emailRegex) || [];
+    const emailFallback = emailsEncontrados.length > 0 ? emailsEncontrados[0].toLowerCase() : "";
+    
+    return {
+      nombre: "",
+      email: emailFallback
+    };
+  }
+}
 
 //////////////////////// organizar informacion para almacenar /////////////////
 
@@ -1219,6 +1283,7 @@ let candidatos = snap.docs.map(doc => {
     status_interno: data.status_interno || 'new',
     assignedTo: data.assignedTo || null,      
     history: data.historial_movimientos || [], // <--- CRONOLOGÍA
+    origen: data.origen || null, // Origen del candidato (carga_manual, webhook_zoho, etc.)
     
     // Datos de IA y notas
     ia_score: data.ia_score || 0,
@@ -2981,6 +3046,46 @@ async function generarResenaVideo(videoUrl, puesto) {
       };
     }
     
+    // 🔥 CORRECCIÓN: Gemini necesita URI de GCS (gs://) o URL pública directa
+    // Si es una signed URL de GCS, extraer el path y construir gs://
+    // Si es una URL externa (Drive, YouTube), intentar usar directamente o subir a GCS
+    
+    let videoUriParaGemini = videoUrl;
+    
+    // Si es una signed URL de GCS (contiene storage.googleapis.com o storage.cloud.google.com)
+    if (videoUrl.includes('storage.googleapis.com') || videoUrl.includes('storage.cloud.google.com')) {
+      // Extraer el path del bucket desde la URL
+      // Ejemplo: https://storage.googleapis.com/bucket-name/path/to/video.mp4?X-Goog-Algorithm=...
+      const urlObj = new URL(videoUrl);
+      const pathParts = urlObj.pathname.split('/').filter(p => p);
+      if (pathParts.length >= 2) {
+        const bucketName = pathParts[0];
+        const filePath = pathParts.slice(1).join('/');
+        videoUriParaGemini = `gs://${bucketName}/${filePath}`;
+        console.log(`🔄 [DEBUG] Convertido signed URL a GCS URI: ${videoUriParaGemini}`);
+      }
+    }
+    // Si es Google Drive, necesitamos convertir el link a formato de descarga directa
+    else if (videoUrl.includes('drive.google.com')) {
+      // Intentar convertir link de Drive a formato de descarga
+      // Si es un link de visualización, convertirlo a formato de descarga
+      if (videoUrl.includes('/file/d/')) {
+        const fileIdMatch = videoUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+        if (fileIdMatch) {
+          const fileId = fileIdMatch[1];
+          // Intentar usar el link directo de descarga (requiere que el archivo sea público)
+          videoUriParaGemini = `https://drive.google.com/uc?export=download&id=${fileId}`;
+          console.log(`🔄 [DEBUG] Convertido link de Drive a formato de descarga: ${videoUriParaGemini}`);
+        }
+      }
+    }
+    // Si es YouTube, usar la URL directamente (Gemini puede procesar YouTube)
+    else if (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be')) {
+      // Gemini puede procesar YouTube directamente, usar la URL tal cual
+      videoUriParaGemini = videoUrl;
+      console.log(`🔄 [DEBUG] Usando link de YouTube directamente: ${videoUriParaGemini}`);
+    }
+    
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
     
     const prompt = `
@@ -3000,20 +3105,76 @@ async function generarResenaVideo(videoUrl, puesto) {
       NO incluyas score ni recomendaciones, solo la reseña descriptiva.
     `;
     
-    // Gemini puede procesar video desde URL directamente
-    // Nota: Gemini 2.5 Flash acepta videos desde URLs públicas
-    // Usamos la sintaxis de partes múltiples: texto + video
-    const parts = [
-      { text: prompt },
-      { 
-        fileData: {
-          fileUri: videoUrl,
-          mimeType: "video/mp4"
-        }
+    // Intentar con fileData primero (para GCS URIs)
+    let result;
+    try {
+      if (videoUriParaGemini.startsWith('gs://')) {
+        // Si es URI de GCS, usar fileData
+        const parts = [
+          { text: prompt },
+          { 
+            fileData: {
+              fileUri: videoUriParaGemini,
+              mimeType: "video/mp4"
+            }
+          }
+        ];
+        result = await model.generateContent(parts);
+      } else {
+        // Si es URL HTTP, intentar usar directamente (Gemini 2.5 puede aceptar URLs públicas)
+        // Nota: Esto puede fallar, en ese caso necesitaremos subir el video a GCS primero
+        const parts = [
+          { text: prompt },
+          { 
+            fileData: {
+              fileUri: videoUriParaGemini,
+              mimeType: "video/mp4"
+            }
+          }
+        ];
+        result = await model.generateContent(parts);
       }
-    ];
-    
-    const result = await model.generateContent(parts);
+    } catch (geminiError) {
+      // Si falla con URL HTTP, intentar subir el video a GCS primero
+      if (!videoUriParaGemini.startsWith('gs://') && !videoUriParaGemini.includes('youtube.com')) {
+        console.log(`⚠️ [DEBUG] Falló con URL HTTP, intentando subir a GCS...`);
+        
+        try {
+          // Descargar el video
+          const videoResponse = await axios.get(videoUriParaGemini, { 
+            responseType: 'arraybuffer',
+            timeout: 30000,
+            maxContentLength: 100 * 1024 * 1024 // 100MB máximo
+          });
+          
+          // Subir a GCS
+          const videoFileName = `CVs_staging/videos/${crypto.randomUUID()}_video.mp4`;
+          const videoBucketFile = bucket.file(videoFileName);
+          await videoBucketFile.save(Buffer.from(videoResponse.data), {
+            metadata: { contentType: "video/mp4" }
+          });
+          
+          // Usar URI de GCS
+          const gcsUri = `gs://${bucket.name}/${videoFileName}`;
+          console.log(`✅ [DEBUG] Video subido a GCS: ${gcsUri}`);
+          
+          const parts = [
+            { text: prompt },
+            { 
+              fileData: {
+                fileUri: gcsUri,
+                mimeType: "video/mp4"
+              }
+            }
+          ];
+          result = await model.generateContent(parts);
+        } catch (uploadError) {
+          throw new Error(`Error subiendo video a GCS: ${uploadError.message}`);
+        }
+      } else {
+        throw geminiError;
+      }
+    }
     
     const reseña = result.response.text().trim();
     
@@ -3024,6 +3185,7 @@ async function generarResenaVideo(videoUrl, puesto) {
     };
   } catch (error) {
     console.error("❌ Error procesando video:", error.message);
+    console.error("❌ Stack completo:", error.stack);
     
     // Si el error es de acceso, probablemente el link es privado
     if (error.message.includes('403') || error.message.includes('permission') || error.message.includes('access')) {
@@ -3081,18 +3243,57 @@ async function verificaConocimientosMinimos(puesto, textoCandidato, declaracione
       5. ACTITUD: Respuestas arrogantes o agresivas.
          -> ACCIÓN: Score < 50. Flag OBLIGATORIA: "Mala Actitud".
 
-      === 📋 CRITERIOS DE PERFIL ===
-      > SENIORITY: Junior (1-2), Semi-Senior (2-5), Senior (+5).
-      > ROLES:
-        - Automatización: Experiencia REAL en Make/Zapier.
-        - Dev Web: Stack moderno + Portafolio.
+      === 📋 CRITERIOS DE PERFIL (PONDERACIÓN) ===
+      Evalúa estos factores y combínalos para el score final (0-100):
+      
+      > SENIORITY (Peso: 20%):
+        - Junior (1-2 años): Score base 50-60
+        - Semi-Senior (2-5 años): Score base 60-75
+        - Senior (+5 años): Score base 70-85
+      
+      > EXPERIENCIA ESPECÍFICA (Peso: 35% - MÁS IMPORTANTE):
+        - Automatización: Experiencia REAL en Make/Zapier/Power Automate (proyectos concretos, workflows reales, no solo "conozco").
+        - Dev Web: Stack moderno (React/Vue/Next.js) + Portafolio demostrable con proyectos reales.
+        - Marketing Digital: Campañas reales con resultados (Meta Ads, Google Ads, Analytics con métricas), no solo "manejo redes".
+        - Diseño Gráfico: Portfolio con trabajos reales, dominio de herramientas (Figma, Adobe Suite), proyectos para clientes.
+        - RRHH: Experiencia en reclutamiento, selección, gestión de personal, conocimiento de ATS/CRM.
+        - Ventas: Experiencia con CRM (HubSpot, Salesforce), métricas de ventas, manejo de pipeline.
+        - Contabilidad: Experiencia con software contable, manejo de estados financieros, certificaciones relevantes.
+        - Otros roles: Ajusta según el puesto "${puesto}" - busca experiencia CONCRETA y DEMOSTRABLE.
+      
+      > HERRAMIENTAS Y TECNOLOGÍAS (Peso: 25%):
+        - Herramientas mencionadas en el puesto: +10 si domina, +5 si conoce básicamente.
+        - Stack completo vs parcial: Ajusta según relevancia para el rol.
+        - Certificaciones relevantes: Considera como bonus si son oficiales y actualizadas.
+      
+      > COMUNICACIÓN Y PRESENTACIÓN (Peso: 20%):
+        - Video: Claridad, profesionalismo, estructura del mensaje, coherencia.
+        - CV: Organización, detalle, coherencia entre experiencia y habilidades.
+        - Formulario: Completitud, calidad de respuestas, atención al detalle.
+
+      === 🎯 GUÍA DE SCORING FINAL ===
+      - 0-40: Filtros de muerte súbita activos O perfil muy bajo (falta experiencia base, sin herramientas clave).
+      - 41-60: Perfil básico - Cumple requisitos mínimos pero con gaps importantes (herramientas parciales, experiencia limitada).
+      - 61-75: Perfil sólido - Cumple requisitos principales del puesto, experiencia adecuada, herramientas necesarias.
+      - 76-85: Perfil destacado - Supera expectativas, experiencia relevante sólida, dominio de herramientas clave.
+      - 86-100: Perfil excepcional - Experiencia excepcional, dominio completo de stack, resultados demostrables.
+      
+      NOTA: Un candidato puede tener score alto (75+) pero activar filtros de muerte súbita → Score final = 0-40.
+
+      === 🔄 PROCESO DE EVALUACIÓN ===
+      1. PRIMERO: Verifica filtros de muerte súbita → Si hay, Score = 0-40 y termina.
+      2. SEGUNDO: Evalúa Seniority → Asigna score base según años.
+      3. TERCERO: Evalúa Experiencia Específica → Ajusta score según relevancia y profundidad.
+      4. CUARTO: Evalúa Herramientas → Ajusta según dominio y completitud del stack.
+      5. QUINTO: Evalúa Comunicación → Ajusta según calidad de presentación.
+      6. FINAL: Combina factores según ponderación y aplica rango final.
 
       === 🧮 SALIDA JSON EXACTA ===
       Responde SOLO con este JSON:
       {
         "score": (0-100),
         "pasa": (true si score >= 70),
-        "motivos": "Frase de 1 línea justificando el score.",
+        "motivos": "Justificación concisa del score (2-3 líneas máximo). Debe explicar brevemente: fortalezas principales, experiencia relevante, y por qué ese score específico. Sin redundancias.",
         "alertas": ["Array", "de", "Strings", "con", "las", "Flags", "detectadas"]
       }
     `;
@@ -3285,6 +3486,58 @@ async function registrarEstadoWebhook(webhookName, exito, error = null) {
   }
 }
 // ==========================================================================
+// 📥 ENDPOINT: ANALIZAR CV (Solo extrae nombre/email, NO guarda)
+// ==========================================================================
+app.post("/candidatos/analizar-cv", upload.single('cv'), async (req, res) => {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/f002550b-8fd2-4cb5-a05e-1ab2645067d4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:3352',message:'Endpoint /candidatos/analizar-cv recibió request',data:{method:req.method,hasFile:!!req.file,headers:Object.keys(req.headers)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
+  try {
+    console.log("🔍 Iniciando análisis de CV (solo extracción)...");
+    
+    // 1. Validaciones Iniciales
+    if (!req.file) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/f002550b-8fd2-4cb5-a05e-1ab2645067d4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:3358',message:'Validación falló: falta archivo',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
+      return res.status(400).json({ error: "Falta el archivo PDF" });
+    }
+    
+    // 2. Leer archivo temporal
+    const fs = require('fs');
+    const fileBuffer = fs.readFileSync(req.file.path);
+    
+    // 3. Extraer Texto del PDF
+    const pdfData = await pdfParse(fileBuffer);
+    const textoCV = pdfData.text.slice(0, 20000);
+    
+    // 4. Extraer nombre y email con IA
+    console.log("🤖 Extrayendo nombre y email del CV con IA...");
+    const datosExtraidos = await extraerNombreYEmailDelCV(textoCV);
+    
+    // Limpieza del archivo temporal local
+    try { fs.unlinkSync(req.file.path); } catch(e) {}
+    
+    console.log(`✅ Análisis completado: ${datosExtraidos.nombre || 'Sin nombre'} - ${datosExtraidos.email || 'Sin email'}`);
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/f002550b-8fd2-4cb5-a05e-1ab2645067d4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:3375',message:'Enviando respuesta JSON exitosa',data:{nombre:datosExtraidos.nombre,email:datosExtraidos.email},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    res.json({ 
+      ok: true, 
+      nombre: datosExtraidos.nombre || "",
+      email: datosExtraidos.email || ""
+    });
+    
+  } catch (error) {
+    console.error("❌ Error en análisis de CV:", error);
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/f002550b-8fd2-4cb5-a05e-1ab2645067d4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:3382',message:'Error capturado en catch',data:{error:error.message,stack:error.stack?.substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================================================
 // 📥 NUEVA FUNCIÓN: CARGA MANUAL CON CLASIFICACIÓN (Persistente)
 // ==========================================================================
 // Reutilizamos 'upload' que ya tienes configurado con Multer (Fuente 118)
@@ -3321,6 +3574,32 @@ app.post("/candidatos/ingreso-manual", upload.single('cv'), async (req, res) => 
       const pdfData = await pdfParse(fileBuffer);
       const textoCV = pdfData.text.slice(0, 20000); // Límite de caracteres
 
+      // 3.5. Generar reseña del CV (igual que en ZOHO)
+      console.log("📝 Generando reseña del CV...");
+      const reseñaCV = await generarResenaCV(textoCV, puesto || "General");
+
+      // 3.6. Si nombre o email no vienen del formulario, extraerlos con IA
+      let nombreFinal = nombre;
+      let emailFinal = email;
+      
+      if (!nombre || !email) {
+        console.log("🤖 Extrayendo nombre y email del CV con IA...");
+        const datosExtraidos = await extraerNombreYEmailDelCV(textoCV);
+        
+        // Solo usar datos de IA si no vinieron del formulario
+        if (!nombreFinal && datosExtraidos.nombre) {
+          nombreFinal = datosExtraidos.nombre;
+        }
+        if (!emailFinal && datosExtraidos.email) {
+          emailFinal = datosExtraidos.email;
+        }
+      }
+      
+      // Actualizar emailSafe con el email final (ya sea del formulario o de IA)
+      const emailSafeFinal = (emailFinal || "manual_no_email").trim().toLowerCase();
+      // Si el email cambió, regenerar el safeId
+      const safeIdFinal = emailSafeFinal.replace(/[^a-z0-9]/g, "_") + "_" + Date.now().toString().slice(-4);
+
       // 4. Ejecutar el Clasificador (IA) (Igual que Fuente 77-79)
       // Usamos tu función existente 'verificaConocimientosMinimos' o el prompt directo
       // Aquí reutilizo la lógica de Score que ya tienes implementada
@@ -3330,16 +3609,22 @@ app.post("/candidatos/ingreso-manual", upload.single('cv'), async (req, res) => 
       // Si no tienes esa función exportada, usamos la lógica directa.
       const analisisIA = await verificaConocimientosMinimos(
           puesto || "General", 
-          textoCV
+          textoCV,
+          "", // declaraciones vacío
+          reseñaCV, // Reseña del CV generada
+          null // video (no hay en carga manual inicial)
       );
+
+      // Limitar score inicial a máximo 70 para carga manual (antes de la entrevista)
+      analisisIA.score = Math.min(analisisIA.score, 70);
 
       // 5. Guardar en Firestore (La Verdad Única - Fuente 80)
       const nombreUsuario = req.body.usuario_accion || req.body.responsable || "Admin";
       
       const nuevoCandidato = {
-          id: safeId,
-          nombre: nombre || "Candidato Manual",
-          email: emailSafe,
+          id: safeIdFinal,
+          nombre: nombreFinal || "Candidato Manual",
+          email: emailSafeFinal,
           puesto: puesto || "Sin especificar",
           
           // Datos del Archivo
@@ -3353,6 +3638,9 @@ app.post("/candidatos/ingreso-manual", upload.single('cv'), async (req, res) => 
           ia_motivos: analisisIA.motivos || "Ingresado manualmente",
           ia_alertas: analisisIA.alertas || [],
           ia_status: "processed",
+          
+          // Reseñas generadas por IA
+          reseña_cv: reseñaCV,
           
           // Metadatos
           origen: "carga_manual",
@@ -3368,20 +3656,26 @@ app.post("/candidatos/ingreso-manual", upload.single('cv'), async (req, res) => 
             {
                 date: new Date().toISOString(),
                 event: 'Ingreso Manual',
-                detail: `Candidato cargado manualmente por: ${nombreUsuario}`,
+                detail: `CV cargado manualmente por: ${nombreUsuario}`,
                 usuario: nombreUsuario
             }
           ]
       };
 
       // Escribimos en la colección maestra (MAIN_COLLECTION definida en Fuente 29)
-      await firestore.collection("CVs_staging").doc(safeId).set(nuevoCandidato);
+      await firestore.collection("CVs_staging").doc(safeIdFinal).set(nuevoCandidato);
 
       // Limpieza del archivo temporal local
       try { fs.unlinkSync(req.file.path); } catch(e) {}
 
-      console.log(`✅ Candidato manual guardado: ${safeId} - Score: ${analisisIA.score}`);
-      res.json({ ok: true, id: safeId, score: analisisIA.score });
+      console.log(`✅ Candidato manual guardado: ${safeIdFinal} - Score: ${analisisIA.score} - Origen: ${nuevoCandidato.origen}`);
+      res.json({ 
+        ok: true, 
+        id: safeIdFinal, 
+        score: analisisIA.score,
+        nombre: nombreFinal || "Candidato Manual",
+        email: emailSafeFinal
+      });
 
   } catch (error) {
       console.error("❌ Error en carga manual:", error);
@@ -3787,16 +4081,10 @@ app.patch("/candidatos/:id", async (req, res) => {
     }
     // 2. TRACKING DE CAMBIOS DE STAGE
     else if (updates.stage === 'stage_2') {
-        // Siempre mostrar quién lo aprobó, y si además se asigna, mencionarlo
-        let detalle = `Aprobado por: ${nombreAccion}`;
-        if (updates.assignedTo) {
-            detalle += `. Asignado a: ${updates.assignedTo}`;
-        }
-        
         nuevoEvento = {
             date: new Date().toISOString(),
             event: 'Aprobado a Gestión',
-            detail: detalle,
+            detail: `Aprobado por: ${nombreAccion}`,
             usuario: nombreAccion
         };
     } 
@@ -3834,10 +4122,145 @@ app.patch("/candidatos/:id", async (req, res) => {
             usuario: nombreAccion
         };
     }
+    // 4. TRACKING DE ENVÍO DE MAIL CON LINK DE MEET
+    else if (updates.mail_meet_enviado === true) {
+        nuevoEvento = {
+            date: new Date().toISOString(),
+            event: 'Link de Entrevista Enviado',
+            detail: `Link de Meet/Zoom enviado a ${docSnap.data().email || 'candidato'}`,
+            usuario: nombreAccion
+        };
+        // No guardamos el flag mail_meet_enviado, solo lo usamos para detectar el evento
+        delete finalUpdate.mail_meet_enviado;
+    }
 
     // Si hay evento para agregar, lo guardamos
     if (nuevoEvento) {
         finalUpdate.historial_movimientos = admin.firestore.FieldValue.arrayUnion(nuevoEvento);
+    }
+
+    // 🎥 DETECCIÓN Y ANÁLISIS AUTOMÁTICO DE VIDEO (Opción B)
+    const datosActuales = docSnap.data();
+    const videoUrlAnterior = datosActuales.video_url || null;
+    const videoUrlNuevo = updates.video_url || null;
+    
+    // Si se está agregando o reemplazando un video
+    if (videoUrlNuevo && videoUrlNuevo !== videoUrlAnterior) {
+        console.log(`🎥 [DEBUG] Video detectado en PATCH para candidato ${id}`);
+        console.log(`🎥 [DEBUG] Video anterior: ${videoUrlAnterior || 'ninguno'}`);
+        console.log(`🎥 [DEBUG] Video nuevo: ${videoUrlNuevo.substring(0, 50)}...`);
+        console.log(`🎥 [DEBUG] Score ANTES de analizar video: ${datosActuales.ia_score || 'N/A'}`);
+        
+        try {
+            // 1. Generar reseña del video
+            console.log(`🎥 [DEBUG] Iniciando generación de reseña del video...`);
+            const resultadoVideo = await generarResenaVideo(videoUrlNuevo, datosActuales.puesto || "General");
+            
+            let reseñaVideo = null;
+            let videoError = null;
+            let videoLinkPublico = null;
+            
+            if (resultadoVideo.reseña) {
+                reseñaVideo = resultadoVideo.reseña;
+                videoLinkPublico = resultadoVideo.linkPublico;
+                console.log("✅ [DEBUG] Reseña del video generada correctamente");
+                console.log(`✅ [DEBUG] Reseña (primeros 100 chars): ${reseñaVideo.substring(0, 100)}...`);
+            } else {
+                videoError = resultadoVideo.error;
+                videoLinkPublico = resultadoVideo.linkPublico;
+                console.log(`⚠️ [DEBUG] Error en video: ${videoError}`);
+            }
+            
+            // 2. Re-analizar score con el video incluido
+            if (reseñaVideo) {
+                // Obtener datos existentes para el re-análisis
+                const reseñaCV = datosActuales.reseña_cv || null;
+                const respuestasFiltro = datosActuales.respuestas_filtro || {};
+                const datosFormulario = JSON.stringify(respuestasFiltro);
+                
+                console.log(`🤖 [DEBUG] Iniciando re-análisis IA con CV + Video...`);
+                console.log(`🤖 [DEBUG] Tiene reseña CV: ${!!reseñaCV}`);
+                console.log(`🤖 [DEBUG] Tiene reseña Video: ${!!reseñaVideo}`);
+                
+                // Re-analizar con CV + Video
+                const scoreAnterior = datosActuales.ia_score || 50;
+                let analisisIA = { score: scoreAnterior, motivos: datosActuales.ia_motivos || "Pendiente", alertas: datosActuales.ia_alertas || [] };
+                
+                try {
+                    analisisIA = await verificaConocimientosMinimos(
+                        datosActuales.puesto || "General",
+                        datosFormulario,
+                        "", // declaraciones vacío
+                        reseñaCV,
+                        reseñaVideo
+                    );
+                    
+                    console.log(`🤖 [DEBUG] Score DESPUÉS de IA (sin límite): ${analisisIA.score}`);
+                    
+                    // Mantener límite según origen
+                    const origen = datosActuales.origen || "";
+                    if (origen === "webhook_zoho_passive" || origen.includes("zoho") || origen.includes("mail")) {
+                        // Si vino por Zoho, mantener límite de 80
+                        analisisIA.score = Math.min(analisisIA.score, 80);
+                        console.log(`🤖 [DEBUG] Origen: Zoho → Límite aplicado: 80`);
+                    } else if (origen === "carga_manual") {
+                        // Si es carga manual CON video agregado, límite de 75 (sin video es 70)
+                        analisisIA.score = Math.min(analisisIA.score, 75);
+                        console.log(`🤖 [DEBUG] Origen: Carga Manual → Límite aplicado: 75`);
+                    }
+                    
+                    console.log(`🤖 [DEBUG] Score FINAL (con límite): ${analisisIA.score}`);
+                    console.log(`📊 [DEBUG] Cambio de score: ${scoreAnterior} → ${analisisIA.score} (diferencia: ${analisisIA.score - scoreAnterior})`);
+                    
+                    // Agregar alerta si hay error con el video
+                    if (videoError) {
+                        if (!Array.isArray(analisisIA.alertas)) {
+                            analisisIA.alertas = [];
+                        }
+                        analisisIA.alertas.push(`Video no procesado: ${videoError}`);
+                    }
+                    
+                    // Actualizar score y motivos
+                    finalUpdate.ia_score = analisisIA.score;
+                    finalUpdate.ia_motivos = analisisIA.motivos;
+                    finalUpdate.ia_alertas = analisisIA.alertas || [];
+                    
+                } catch (e) {
+                    console.error("❌ [DEBUG] Error en re-análisis IA con video:", e.message);
+                    console.error("❌ [DEBUG] Stack:", e.stack);
+                }
+            } else {
+                console.log(`⚠️ [DEBUG] No se pudo generar reseña del video, no se re-analiza el score`);
+            }
+            
+            // 3. Guardar datos del video
+            finalUpdate.reseña_video = reseñaVideo || null;
+            finalUpdate.video_error = videoError || null;
+            finalUpdate.video_link_publico = videoLinkPublico;
+            finalUpdate.video_tipo = updates.video_tipo || "link"; // Por defecto "link" si se agrega manualmente
+            
+            // 4. Agregar evento a cronología
+            const eventoVideo = {
+                date: new Date().toISOString(),
+                event: videoUrlAnterior ? 'Video Reemplazado' : 'Video Agregado',
+                detail: videoUrlAnterior 
+                    ? `Video reemplazado y analizado por: ${nombreAccion}` 
+                    : `Video agregado y analizado por: ${nombreAccion}`,
+                usuario: nombreAccion
+            };
+            
+            if (!finalUpdate.historial_movimientos) {
+                finalUpdate.historial_movimientos = admin.firestore.FieldValue.arrayUnion(eventoVideo);
+            } else {
+                // Si ya hay un evento, agregamos este también
+                finalUpdate.historial_movimientos = admin.firestore.FieldValue.arrayUnion(eventoVideo);
+            }
+            
+        } catch (error) {
+            console.error("❌ Error analizando video en PATCH:", error.message);
+            // Si falla el análisis, guardamos el link igual pero con error
+            finalUpdate.video_error = `Error al analizar video: ${error.message}`;
+        }
     }
 
     // Impactar en Firestore
@@ -3990,6 +4413,23 @@ app.post("/webhook-form2", async (req, res) => {
     res.status(500).send("Error interno del servidor");
   }
 });
+
+// ==========================================
+// 🔥 ENDPOINT DE CONFIGURACIÓN FIREBASE (PÚBLICO)
+// ==========================================
+app.get("/firebase-config", (req, res) => {
+  // Configuración pública para el cliente de Firebase Auth
+  // Estas variables deben estar en .env: FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN
+  res.json({
+    apiKey: process.env.FIREBASE_API_KEY || "",
+    authDomain: process.env.FIREBASE_AUTH_DOMAIN || `${process.env.FIREBASE_PROJECT_ID}.firebaseapp.com`,
+    projectId: process.env.FIREBASE_PROJECT_ID || "",
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || "",
+    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || "",
+    appId: process.env.FIREBASE_APP_ID || ""
+  });
+});
+
 // ==========================================
 // 🚀 INICIO DEL SERVIDOR (CON BUCLE AUTOMÁTICO)
 // ==========================================
@@ -4026,12 +4466,28 @@ app.listen(PORT, "0.0.0.0", async () => {
   // 🔥 LA CORRECCIÓN: CICLO INFINITO 🔥
   console.log("🔌 Iniciando servicio de lectura de correos (Ciclo Automático)...");
   
+  // SEMÁFORO: Evita que se solapen los procesos si uno tarda mucho
+  let isProcessing = false;
+
   // 1. Ejecutar inmediatamente al arrancar para no esperar
   analizarCorreos(); 
   
-  // 2. Programar repetición cada 60 segundos (60000 ms)
-  setInterval(() => {
+  // 2. Programar repetición cada 120 segundos (120000 ms)
+  setInterval(async () => {
+      if (isProcessing) {
+          console.log("⚠️ Saltando ciclo: El proceso anterior todavía no terminó.");
+          return;
+      }
+
+      isProcessing = true; // 🔴 Bloquear semáforo
       console.log("⏰ Ciclo programado: Buscando nuevos correos...");
-      analizarCorreos();
-  }, 60000); 
+      
+      try {
+          await analizarCorreos();
+      } catch (error) {
+          console.error("❌ Error crítico en el ciclo:", error);
+      } finally {
+          isProcessing = false; // 🟢 Liberar semáforo (siempre)
+      }
+  }, 120000); 
 });
