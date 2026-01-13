@@ -3449,6 +3449,95 @@ async function generarResenaVideo(videoUrl, puesto) {
 }
 
 // ==========================================
+// 📥 HELPER: PROCESAR ARCHIVO DESDE LINK (WorkDrive, Loom, YouTube, Drive)
+// ==========================================
+/**
+ * Descarga archivos desde links privados (WorkDrive) y los sube a Firebase Storage,
+ * o retorna links públicos directamente (Loom, YouTube, Google Drive).
+ * 
+ * @param {string} url - URL del archivo (WorkDrive, Loom, YouTube, Drive, etc.)
+ * @param {string} tipo - Tipo de archivo: 'cv' o 'video'
+ * @param {string} safeId - ID seguro del candidato para nombrar el archivo
+ * @returns {Promise<{urlPublica: string, procesado: boolean, error: string|null}>}
+ */
+async function procesarArchivoDesdeLink(url, tipo, safeId) {
+  // Validación básica
+  if (!url || !url.startsWith('http')) {
+    return { urlPublica: url || "", procesado: false, error: null };
+  }
+
+  try {
+    // Detectar tipo de link
+    const esWorkDrive = url.includes('workdrive.zoho') || url.includes('drive.zoho');
+    const esLoom = url.includes('loom.com');
+    const esYouTube = url.includes('youtube.com') || url.includes('youtu.be');
+    const esGoogleDrive = url.includes('drive.google.com');
+    
+    // Si es un link público conocido, guardarlo directamente
+    if (esLoom || esYouTube || esGoogleDrive) {
+      console.log(`✅ Link ${tipo} es público (${esLoom ? 'Loom' : esYouTube ? 'YouTube' : 'Google Drive'}), guardando directamente.`);
+      return { urlPublica: url, procesado: false, error: null };
+    }
+    
+    // Si es WorkDrive o link externo desconocido, descargar y subir a Storage
+    if (esWorkDrive || (!esLoom && !esYouTube && !esGoogleDrive)) {
+      console.log(`📥 Descargando ${tipo} desde ${esWorkDrive ? 'WorkDrive' : 'link externo'}...`);
+      
+      // Configurar según el tipo de archivo
+      let extension, contentType, carpeta;
+      if (tipo === 'cv') {
+        extension = 'pdf';
+        contentType = 'application/pdf';
+        carpeta = 'files';
+      } else {
+        extension = 'mp4';
+        contentType = 'video/mp4';
+        carpeta = 'videos';
+      }
+      
+      // Descargar el archivo
+      const response = await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 60000, // 60 segundos timeout
+        maxContentLength: tipo === 'cv' ? 10 * 1024 * 1024 : 100 * 1024 * 1024, // 10MB para CV, 100MB para video
+        headers: { 
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' 
+        }
+      });
+      
+      // Subir a Firebase Storage
+      const fileName = `CVs_staging/${carpeta}/${safeId}_${tipo}.${extension}`;
+      const bucketFile = bucket.file(fileName);
+      
+      await bucketFile.save(Buffer.from(response.data), { 
+        metadata: { contentType } 
+      });
+      
+      // Generar link público firmado (válido hasta 2035)
+      const [publicUrl] = await bucketFile.getSignedUrl({
+        action: 'read',
+        expires: '01-01-2035',
+        responseDisposition: tipo === 'cv' ? 'inline' : 'inline' // Abrir en navegador, no descargar
+      });
+      
+      console.log(`✅ ${tipo.toUpperCase()} descargado y subido a Storage: ${fileName}`);
+      return { urlPublica: publicUrl, procesado: true, error: null };
+    }
+    
+    // Fallback: retornar el link original si no se procesó
+    return { urlPublica: url, procesado: false, error: null };
+    
+  } catch (error) {
+    console.error(`❌ Error procesando ${tipo} desde link:`, error.message);
+    return {
+      urlPublica: url, // Mantener el link original aunque falle
+      procesado: false,
+      error: `No se pudo descargar desde ${url}: ${error.message}`
+    };
+  }
+}
+
+// ==========================================
 // 🧠 CEREBRO IA: CLASIFICADOR VIVIANA/GLADYMAR/SANDRA (FINAL CON FLAGS)
 // ==========================================
 async function verificaConocimientosMinimos(puesto, textoCandidato, declaraciones = "", reseñaCV = null, reseñaVideo = null) {
@@ -3640,6 +3729,75 @@ app.post("/webhook/zoho", upload.none(), async (req, res) => {
       console.log(`🎥 Video detectado (${videoTipo}): ${videoUrl.substring(0, 50)}...`);
     }
     
+    // 🔥 DETECCIÓN INTELIGENTE DE CV
+    // Zoho puede enviar CV de dos formas:
+    // 1. Link directo (CV_Link, Curriculum_Link, PDF_Link): "https://workdrive.zoho.eu/..."
+    // 2. Archivo subido: Puede venir como CV_File, CV_Attachment, PDF_File, etc.
+    let cvUrl = "";
+    let cvTipo = "ninguno"; // "link" | "archivo" | "ninguno"
+    
+    // Buscar en múltiples campos posibles (CV_Link, Curriculum_Link, PDF_Link, CV_File, etc.)
+    const camposCV = Object.keys(data).filter(k => 
+      (k.toLowerCase().includes('cv') || 
+       k.toLowerCase().includes('curriculum') || 
+       k.toLowerCase().includes('pdf')) &&
+      (k.toLowerCase().includes('link') || 
+       k.toLowerCase().includes('file') || 
+       k.toLowerCase().includes('url') ||
+       k.toLowerCase().includes('attachment'))
+    );
+    
+    if (camposCV.length > 0) {
+      console.log(`📄 Campos relacionados con CV encontrados:`, camposCV);
+      const cvField = data[camposCV[0]];
+      if (typeof cvField === 'string' && cvField.startsWith('http')) {
+        cvUrl = cvField.trim();
+        cvTipo = "link";
+      } else if (typeof cvField === 'object' && cvField.url) {
+        cvUrl = cvField.url;
+        cvTipo = "archivo";
+      } else if (Array.isArray(cvField) && cvField.length > 0) {
+        // Si viene como array (ej: ["filename.pdf"]), tomar el primer elemento
+        cvUrl = typeof cvField[0] === 'string' ? cvField[0] : (cvField[0]?.url || "");
+        cvTipo = "archivo";
+      }
+    }
+    
+    // Log para debugging
+    if (cvUrl) {
+      console.log(`📄 CV detectado (${cvTipo}): ${cvUrl.substring(0, 50)}...`);
+    }
+    
+    // ===== PROCESAR ARCHIVOS (Descargar desde WorkDrive si es necesario) =====
+    let videoUrlFinal = videoUrl;
+    let cvUrlFinal = cvUrl;
+    let tienePdf = false;
+    
+    // Procesar video si existe
+    if (videoUrl) {
+      console.log(`🎥 Procesando video desde link...`);
+      const resultadoVideo = await procesarArchivoDesdeLink(videoUrl, 'video', safeId);
+      videoUrlFinal = resultadoVideo.urlPublica;
+      if (resultadoVideo.error) {
+        console.warn(`⚠️ Error procesando video: ${resultadoVideo.error}`);
+      } else if (resultadoVideo.procesado) {
+        console.log(`✅ Video procesado y subido a Storage`);
+      }
+    }
+    
+    // Procesar CV si existe
+    if (cvUrl) {
+      console.log(`📄 Procesando CV desde link...`);
+      const resultadoCV = await procesarArchivoDesdeLink(cvUrl, 'cv', safeId);
+      cvUrlFinal = resultadoCV.urlPublica;
+      tienePdf = resultadoCV.procesado; // Solo marcamos como tiene_pdf si se procesó correctamente
+      if (resultadoCV.error) {
+        console.warn(`⚠️ Error procesando CV: ${resultadoCV.error}`);
+      } else if (resultadoCV.procesado) {
+        console.log(`✅ CV procesado y subido a Storage`);
+      }
+    }
+    
     const candidato = {
       id: safeId,
       nombre: `${data.Nombre_Completo || ""} ${data.Apellido || ""}`.trim(),
@@ -3647,8 +3805,8 @@ app.post("/webhook/zoho", upload.none(), async (req, res) => {
       telefono: data.Telefono || "",
       puesto: data.Puesto_Solicitado || "General",
       
-      // Video Link (Mejorado para manejar links y archivos)
-      video_url: videoUrl,
+      // Video Link (URL pública si se procesó desde WorkDrive, o link original si es Loom/YouTube)
+      video_url: videoUrlFinal,
       video_tipo: videoTipo, // Guardamos el tipo para referencia 
       
       respuestas_filtro: {
@@ -3662,11 +3820,11 @@ app.post("/webhook/zoho", upload.none(), async (req, res) => {
 
       // ESTADO INICIAL
       ia_score: 0,
-      ia_status: "waiting_cv", 
-      ia_motivos: "Esperando recepción de CV para análisis completo.",
+      ia_status: tienePdf ? "waiting_analysis" : "waiting_cv", 
+      ia_motivos: tienePdf ? "CV recibido, pendiente de análisis." : "Esperando recepción de CV para análisis completo.",
       
-      cv_url: "", 
-      tiene_pdf: false,
+      cv_url: cvUrlFinal, 
+      tiene_pdf: tienePdf,
       
       // ETIQUETAS DE ESTADO
       stage: 'stage_1',           
