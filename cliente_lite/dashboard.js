@@ -1643,8 +1643,8 @@ function ReportView({ candidates, onUpdate, setCurrentReport }) {
         document.body.removeChild(a);
     };
 
-    // Filtrar candidatos listos (Etapa 3)
-    const pipelineCandidates = candidates.filter(c => c.stage === 'stage_3');
+    // Filtrar candidatos listos (Etapa 3) que NO tengan informe generado
+    const pipelineCandidates = candidates.filter(c => c.stage === 'stage_3' && !c.informe_final_data);
 
     // ⚡ MAGIA 1: RECUPERAR BORRADOR AL INICIAR
     React.useEffect(() => {
@@ -2205,6 +2205,103 @@ function ReportView({ candidates, onUpdate, setCurrentReport }) {
         </div>
     );
 }
+
+// =========================================================
+// VISTA: BASE DE DATOS DE INFORMES GENERADOS
+// =========================================================
+function ReportsView({ candidates, setCurrentReport }) {
+    // Filtrar solo candidatos con informe generado
+    const reportsWithData = candidates.filter(c => c.informe_final_data);
+    
+    // Ordenar por fecha de creación (más recientes primero)
+    const sortedReports = [...reportsWithData].sort((a, b) => {
+        const dateA = a.informe_final_data?.fecha_generacion || a.creado_en || 0;
+        const dateB = b.informe_final_data?.fecha_generacion || b.creado_en || 0;
+        return new Date(dateB) - new Date(dateA);
+    });
+
+    const handleViewReport = (candidate) => {
+        if (candidate.informe_final_data) {
+            setCurrentReport(candidate.informe_final_data);
+        }
+    };
+
+    const formatDate = (dateValue) => {
+        if (!dateValue) return 'Fecha no disponible';
+        try {
+            const date = typeof dateValue === 'object' && dateValue._seconds 
+                ? new Date(dateValue._seconds * 1000)
+                : new Date(dateValue);
+            return date.toLocaleDateString('es-AR', { 
+                year: 'numeric', 
+                month: 'short', 
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        } catch {
+            return 'Fecha inválida';
+        }
+    };
+
+    return (
+        <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in duration-500 pb-20">
+            {/* CABECERA */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-6">
+                <div>
+                    <h1 className="text-2xl font-bold text-white">Base de Datos de Informes</h1>
+                    <p className="text-slate-400 text-sm">Todos los informes generados del sistema.</p>
+                </div>
+                <Badge type="success">{sortedReports.length} Informes</Badge>
+            </div>
+
+            {/* LISTA DE INFORMES */}
+            <section className="space-y-4 pt-4">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                    Informes Generados ({sortedReports.length})
+                </h3>
+                {sortedReports.length === 0 ? (
+                    <div className="p-8 border border-slate-800 border-dashed rounded-xl text-center text-slate-600 text-sm">
+                        No hay informes generados aún.
+                    </div>
+                ) : (
+                    <div className="grid gap-3">
+                        {sortedReports.map(c => {
+                            const reportDate = c.informe_final_data?.fecha_generacion || c.creado_en;
+                            return (
+                                <div key={c.id} className="p-4 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between hover:bg-slate-800/50 transition-colors group">
+                                    <div className="flex items-center gap-4 flex-1">
+                                        <div className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center text-white font-bold text-xs">
+                                            {c.nombre.substring(0,2).toUpperCase()}
+                                        </div>
+                                        <div className="flex-1">
+                                            <h4 className="text-sm font-bold text-white group-hover:text-emerald-400 transition-colors">
+                                                {c.nombre}
+                                            </h4>
+                                            <p className="text-[10px] text-slate-500">{c.puesto || "Candidato"}</p>
+                                            <p className="text-[9px] text-slate-600 mt-1">
+                                                Generado: {formatDate(reportDate)}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <button 
+                                            onClick={() => handleViewReport(c)}
+                                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-2"
+                                        >
+                                            <Eye size={14}/> Ver Informe
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </section>
+        </div>
+    );
+}
+
 // --- VISTA DETALLE MEJORADA (CON GESTIÓN DE ENTREVISTA + CHECKLIST) ---
 function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
     const [noteInput, setNoteInput] = useState(candidate.notes || "");
@@ -3532,6 +3629,7 @@ const handleUpdateCandidate = async (id, updates) => {
             case 'stage_2':   return <ManageView candidates={candidates} onSelect={handleSelectCandidate} currentUser={currentUser} />;
             case 'stage_3':   return <ReportView candidates={candidates} onUpdate={handleUpdateCandidate} setCurrentReport={setCurrentReport} />;
             case 'search':    return <SearchView candidates={candidates} onSelect={handleSelectCandidate} />;
+            case 'reports':   return <ReportsView candidates={candidates} setCurrentReport={setCurrentReport} />;
             case 'trash':     return <TrashView candidates={candidates} onUpdate={handleUpdateCandidate} />;
             default:          return <DashboardView candidates={candidates} onNavigate={setActiveTab} />;
         }
@@ -3545,6 +3643,7 @@ const handleUpdateCandidate = async (id, updates) => {
         { id: 'stage_3', label: '3. Generar Informe', icon: FileJson, sub: 'Listos para Asignar' },
         { type: 'divider', label: 'SISTEMA' },
         { id: 'search', label: 'Búsqueda', icon: Search },
+        { id: 'reports', label: 'Informes', icon: FileText },
         { id: 'trash', label: 'Papelera', icon: Trash2 },
     ];
 
