@@ -2209,7 +2209,7 @@ function ReportView({ candidates, onUpdate, setCurrentReport }) {
 // =========================================================
 // VISTA: BASE DE DATOS DE INFORMES GENERADOS
 // =========================================================
-function ReportsView({ candidates, setCurrentReport }) {
+function ReportsView({ candidates, setCurrentReport, onUpdate }) {
     // ⚡ ESTADO PARA CRONOLOGÍA
     const [selectedCandidateForHistory, setSelectedCandidateForHistory] = React.useState(null);
 
@@ -2412,6 +2412,17 @@ function ReportsView({ candidates, setCurrentReport }) {
                                     </div>
                                     <div className="flex items-center gap-3">
                                         <button 
+                                            onClick={() => {
+                                                if (confirm(`¿Volver a ${c.nombre} a la sección de Gestión para agregar información faltante?`)) {
+                                                    onUpdate(c.id, { stage: 'stage_2' });
+                                                }
+                                            }}
+                                            className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-2"
+                                            title="Volver el candidato a Gestión para completar información"
+                                        >
+                                            <Undo2 size={14}/> Volver a Gestión
+                                        </button>
+                                        <button 
                                             onClick={() => setSelectedCandidateForHistory(c)}
                                             className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-2"
                                         >
@@ -2464,6 +2475,7 @@ function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
     const [transcript, setTranscript] = useState(candidate.interview_transcript || "");
     const [form2Status, setForm2Status] = useState(candidate.process_step_2_form || "pending"); // pending, sent, received
     const [finalResult, setFinalResult] = useState(candidate.process_step_3_result || null); // qualified, disqualified
+
 
     // 🔥 SINCRONIZAR ESTADOS CUANDO CANDIDATE CAMBIA (para que persistan después de F5)
     React.useEffect(() => {
@@ -3381,6 +3393,7 @@ const handleConfirmDisqualified = () => {
                                         {hardSkills.map((skill, i) => <span key={i} className="px-3 py-1 bg-slate-800 text-slate-300 text-[11px] rounded border border-slate-700">{skill}</span>)}
                                     </div>
                                 </div>
+
                             </div>
                         </Card>
 
@@ -3426,56 +3439,6 @@ const handleConfirmDisqualified = () => {
                                 </div>
                             </Card>
                         )}
-
-                        {/* 🔥 SECCIÓN DE GESTIÓN (SOLO SI ESTÁ EN ETAPA 2) 🔥 */}
-                        {candidate.stage === 'stage_2' && (
-                            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
-                                
-                                {/* 1. AGENDAR Y TRANSCRIPCIÓN */}
-                                <div className="bg-slate-950 border border-blue-900/30 rounded-xl p-6 shadow-xl">
-                                    <h3 className="text-sm font-bold text-blue-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                        <Calendar size={16}/> 1. Gestión de Entrevista
-                                    </h3>
-                                    
-{/* BLOQUE NUEVO: BOTONES SEPARADOS (REGISTRAR + ENVIAR) */}
-<div className="grid grid-cols-1 gap-4 mb-6">
-   <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">Link de Meet / Zoom</label>
-   <div className="flex gap-2 w-full">
-       {/* INPUT */}
-       <div className="relative flex-1">
-           <Video className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" size={16}/>
-           <input
-               type="text"
-               placeholder="Pegar link de reunión aquí..."
-               className={`w-full pl-10 pr-4 py-2.5 bg-slate-900 border rounded-lg text-sm text-white focus:outline-none transition-all placeholder-slate-600 ${candidate.meet_link ? 'border-emerald-500/50 text-emerald-400' : 'border-slate-700 focus:border-blue-500'}`}
-               value={candidate.meet_link || meetLink}
-               onChange={(e) => setMeetLink(e.target.value)}
-               onBlur={saveMeetLink}
-           />
-       </div>
-      
-       {/* BOTÓN 1: REGISTRAR (DISKETTE) */}
-       <button
-           onClick={saveMeetLink}
-           className={`px-4 rounded-lg border transition-all flex items-center justify-center gap-2 font-bold text-xs ${candidate.meet_link ? 'bg-emerald-900/20 border-emerald-500/50 text-emerald-400' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white'}`}
-           title="Guardar link en la base de datos"
-       >
-           {candidate.meet_link ? <><CheckCircle size={14}/> GUARDADO</> : <><Save size={14}/> REGISTRAR</>}
-       </button>
-
-
-       {/* BOTÓN 2: ENVIAR MAIL (SOBRE) */}
-       <button
-           onClick={handleOpenMail}
-           disabled={!candidate.meet_link && !meetLink}
-           className={`px-4 rounded-lg border transition-all flex items-center justify-center gap-2 font-bold text-xs ${!candidate.meet_link && !meetLink ? 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white border-blue-500 shadow-lg'}`}
-           title="Abrir correo con invitación"
-       >
-           <Mail size={14}/> ENVIAR MAIL
-       </button>
-   </div>
-</div>
-
 
                                    {/* BLOQUE MEJORADO: TRANSCRIPCIÓN + IA */}
                                    <div className="border-t border-slate-800 pt-4 mt-4">
@@ -3664,7 +3627,6 @@ const handleConfirmDisqualified = () => {
                                    </div>
                                </div>
                            </div>
-                       )}
 
 
                        <Card className="bg-slate-900 border-slate-800 flex flex-col overflow-hidden">
@@ -4087,7 +4049,7 @@ const handleUpdateCandidate = async (id, updates) => {
             case 'stage_2':   return <ManageView candidates={candidates} onSelect={handleSelectCandidate} currentUser={currentUser} />;
             case 'stage_3':   return <ReportView candidates={candidates} onUpdate={handleUpdateCandidate} setCurrentReport={setCurrentReport} />;
             case 'search':    return <SearchView candidates={candidates} onSelect={handleSelectCandidate} />;
-            case 'reports':   return <ReportsView candidates={candidates} setCurrentReport={setCurrentReport} />;
+            case 'reports':   return <ReportsView candidates={candidates} setCurrentReport={setCurrentReport} onUpdate={handleUpdateCandidate} />;
             case 'trash':     return <TrashView candidates={candidates} onUpdate={handleUpdateCandidate} />;
             default:          return <DashboardView candidates={candidates} onNavigate={setActiveTab} />;
         }
