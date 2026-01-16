@@ -1287,9 +1287,16 @@ function ManageView({ candidates, onSelect, currentUser }) {
 // ==========================================
 // 🗑️ VISTA PAPELERA (RECUPERACIÓN)
 // ==========================================
-function TrashView({ candidates, onUpdate }) {
+function TrashView({ candidates, onUpdate, onRefresh }) {
     // Filtramos solo los que están en 'trash'
     const discarded = candidates.filter(c => c.stage === 'trash');
+    
+    // Recargar candidatos cuando se entra a la vista de papelera
+    React.useEffect(() => {
+        if (onRefresh) {
+            onRefresh();
+        }
+    }, []);
 
     return (
         <div className="h-full flex flex-col max-w-7xl mx-auto px-4">
@@ -1298,7 +1305,7 @@ function TrashView({ candidates, onUpdate }) {
                     <Trash2 className="text-rose-500" /> Papelera de Reciclaje
                 </h1>
                 <p className="text-slate-400 text-sm mt-1">
-                    Candidatos descartados. Puedes restaurarlos o ver el motivo de descarte.
+                    Candidatos descartados ({discarded.length}). Puedes restaurarlos o ver el motivo de descarte.
                 </p>
             </div>
 
@@ -1339,9 +1346,13 @@ function TrashView({ candidates, onUpdate }) {
                                     </td>
                                     <td className="px-6 py-3 text-right">
                                         <button 
-                                            onClick={() => {
+                                            onClick={async () => {
                                                 if(confirm(`¿Restaurar a ${c.nombre} a la etapa de Exploración?`)) {
-                                                    onUpdate(c.id, { stage: 'stage_1', status_interno: 'viewed', notes: "" });
+                                                    await onUpdate(c.id, { stage: 'stage_1', status_interno: 'viewed', notes: "" });
+                                                    // Recargar después de restaurar para actualizar la vista
+                                                    if (onRefresh) {
+                                                        setTimeout(() => onRefresh(), 500);
+                                                    }
                                                 }
                                             }}
                                             className="text-xs font-bold text-emerald-500 hover:text-emerald-400 border border-emerald-900/30 bg-emerald-900/10 px-3 py-1.5 rounded hover:bg-emerald-900/20 transition-all"
@@ -4079,6 +4090,7 @@ function App() {
             const candidatos = data.candidatos || data || [];
             setCandidates(candidatos);
             setInit(true);
+            console.log(`✅ Candidatos cargados: ${candidatos.length} total, ${candidatos.filter(c => c.stage === 'trash').length} en papelera`);
         } catch (error) {
             console.error("❌ Error cargando datos:", error);
         } finally {
@@ -4151,6 +4163,13 @@ const handleUpdateCandidate = async (id, updates) => {
         // 6. Actualizamos la BASE DE DATOS (Backend)
         // Ahora finalUpdates lleva el dato 'viewed' correcto
         await api.candidates.update(id, finalUpdates);
+        
+        // 7. Si se movió a papelera, recargar candidatos para asegurar que aparezca en la vista de papelera
+        if (updates.stage === 'trash') {
+            setTimeout(() => {
+                cargarDatos(true); // Forzar recarga
+            }, 500);
+        }
     };
 
     const handleSelectCandidate = (id) => {
@@ -4186,7 +4205,7 @@ const handleUpdateCandidate = async (id, updates) => {
             case 'stage_3':   return <ReportView candidates={candidates} onUpdate={handleUpdateCandidate} setCurrentReport={setCurrentReport} />;
             case 'search':    return <SearchView candidates={candidates} onSelect={handleSelectCandidate} />;
             case 'reports':   return <ReportsView candidates={candidates} setCurrentReport={setCurrentReport} onUpdate={handleUpdateCandidate} />;
-            case 'trash':     return <TrashView candidates={candidates} onUpdate={handleUpdateCandidate} />;
+            case 'trash':     return <TrashView candidates={candidates} onUpdate={handleUpdateCandidate} onRefresh={cargarDatos} />;
             default:          return <DashboardView candidates={candidates} onNavigate={setActiveTab} />;
         }
     };

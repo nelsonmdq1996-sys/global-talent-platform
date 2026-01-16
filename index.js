@@ -1377,7 +1377,8 @@ let candidatos = snap.docs.map(doc => {
 
         // 2. Filtrado por bloqueados y texto
 
-        if (bloqueados.has(c.id.toLowerCase())) return false;
+                // CORRECCION: Los candidatos en trash NO deben ser bloqueados
+        if (bloqueados.has(c.id.toLowerCase()) && c.stage !== 'trash') return false;
 
         if (!termino) return true; // Si no escribiste nada, devuelve todo
 
