@@ -1377,7 +1377,8 @@ let candidatos = snap.docs.map(doc => {
 
         // 2. Filtrado por bloqueados y texto
 
-        if (bloqueados.has(c.id.toLowerCase())) return false;
+                // CORRECCION: Los candidatos en trash NO deben ser bloqueados
+        if (bloqueados.has(c.id.toLowerCase()) && c.stage !== 'trash') return false;
 
         if (!termino) return true; // Si no escribiste nada, devuelve todo
 
@@ -1458,6 +1459,8 @@ app.post("/candidatos/:id/resumen", async (req, res) => {
             return res.status(500).json({ error: "Error de Gemini en proceso manual" });
         }
 
+        // Agregar fecha de generación al informe manual
+        informeManual.fecha_generacion = new Date().toISOString();
         return res.json(informeManual); // Enviamos directo al dashboard sin guardar en DB
     }
 
@@ -1474,7 +1477,14 @@ app.post("/candidatos/:id/resumen", async (req, res) => {
     // Si ya existe un informe guardado y no pedimos regenerar, lo devolvemos
     if (data.informe_final_data && (!manualData || !manualData.forceRegenerate)) {
         console.log("📄 Devolviendo informe ya existente desde Firestore.");
-        return res.json(data.informe_final_data);
+        // Si el informe existente no tiene fecha_generacion, agregarla usando la fecha de creación del documento
+        const informeExistente = { ...data.informe_final_data };
+        if (!informeExistente.fecha_generacion) {
+            // Intentar usar la fecha de creación del documento o la fecha actual
+            const fechaCreacion = doc.createTime ? doc.createTime.toDate().toISOString() : new Date().toISOString();
+            informeExistente.fecha_generacion = fechaCreacion;
+        }
+        return res.json(informeExistente);
     }
 
     // Si no hay informe, lo generamos usando los datos de Firestore
@@ -1512,6 +1522,9 @@ ${alertasPostEntrevista.length > 0 ? `ALERTAS DETECTADAS:\n${alertasPostEntrevis
     );
 
     if (informeGenerado) {
+        // Agregar fecha de generación al informe antes de guardarlo
+        informeGenerado.fecha_generacion = new Date().toISOString();
+        
         // Guardamos el informe en Firestore para que ya quede entrelazado
         await docRef.update({ 
             informe_final_data: informeGenerado,
@@ -3954,7 +3967,7 @@ app.post("/candidatos/ingreso-manual", upload.single('cv'), async (req, res) => 
       
       // 1. Validaciones Iniciales
       if (!req.file) return res.status(400).json({ error: "Falta el archivo PDF" });
-      const { email, nombre, puesto } = req.body; // Datos que vienen del formulario manual
+      const { email, nombre, puesto, salario, monitoreo, disponibilidad, herramientas, logro_destacado, competencias_tecnicas, habilidades_blandas } = req.body; // Datos que vienen del formulario manual
       
       // Generamos un ID seguro igual que en el correo (Fuente 74)
       const emailSafe = (email || "manual_no_email").trim().toLowerCase();
@@ -4005,7 +4018,35 @@ app.post("/candidatos/ingreso-manual", upload.single('cv'), async (req, res) => 
       // Si el email cambió, regenerar el safeId
       const safeIdFinal = emailSafeFinal.replace(/[^a-z0-9]/g, "_") + "_" + Date.now().toString().slice(-4);
 
-      // 4. NO ejecutar análisis automático - el reclutador lo hará manualmente con el botón "Analizar"
+      // 4. Procesar datos clave y skills
+      let respuestasFiltro = {};
+      if (salario || monitoreo || disponibilidad || herramientas || logro_destacado) {
+          respuestasFiltro = {
+              salario: salario || "",
+              monitoreo: monitoreo || "",
+              disponibilidad: disponibilidad || "",
+              herramientas: herramientas || "",
+              logro_destacado: logro_destacado || ""
+          };
+      }
+
+      let competenciasTecnicasArray = [];
+      if (competencias_tecnicas) {
+          try {
+              competenciasTecnicasArray = JSON.parse(competencias_tecnicas);
+          } catch(e) {
+              console.warn("Error parseando competencias_tecnicas:", e);
+          }
+      }
+
+      let habilidadesBlandasArray = [];
+      if (habilidades_blandas) {
+          try {
+              habilidadesBlandasArray = JSON.parse(habilidades_blandas);
+          } catch(e) {
+              console.warn("Error parseando habilidades_blandas:", e);
+          }
+      }
 
       // 5. Guardar en Firestore (La Verdad Única - Fuente 80)
       const nombreUsuario = req.body.usuario_accion || req.body.responsable || "Admin";
@@ -4022,11 +4063,16 @@ app.post("/candidatos/ingreso-manual", upload.single('cv'), async (req, res) => 
           tiene_pdf: true,
           texto_extraido: textoCV, // Guardamos texto para no gastar OCR después
           
-          // Datos de IA (Pendiente de análisis manual)
+          // Datos clave y skills
+          respuestas_filtro: respuestasFiltro,
+          competencias_tecnicas: competenciasTecnicasArray,
+          habilidades_blandas: habilidadesBlandasArray,
+          
+          // Datos de IA (Pendiente de análisis automático)
           ia_score: null,
           ia_motivos: null,
           ia_alertas: [],
-          ia_status: "pending_analysis",
+          ia_status: "analyzing",
           
           // Reseñas generadas por IA (pendiente)
           reseña_cv: null,
@@ -4045,7 +4091,7 @@ app.post("/candidatos/ingreso-manual", upload.single('cv'), async (req, res) => 
             {
                 date: new Date().toISOString(),
                 event: 'Ingreso Manual',
-                detail: `CV cargado manualmente por: ${nombreUsuario}`,
+                detail: `CV cargado manualmente por: ${nombreUsuario}. Análisis automático iniciado.`,
                 usuario: nombreUsuario
             }
           ]
@@ -4054,10 +4100,78 @@ app.post("/candidatos/ingreso-manual", upload.single('cv'), async (req, res) => 
       // Escribimos en la colección maestra (MAIN_COLLECTION definida en Fuente 29)
       await firestore.collection("CVs_staging").doc(safeIdFinal).set(nuevoCandidato);
 
+      // 6. Ejecutar análisis automático
+      console.log(`🤖 Iniciando análisis automático para candidato manual: ${safeIdFinal}`);
+      try {
+          // 6.1. Generar reseña del CV
+          console.log(`📝 Generando reseña del CV...`);
+          const reseñaCV = await generarResenaCV(textoCV, puesto || "Perfil Externo");
+          
+          // 6.2. Construir texto del candidato con datos clave y skills para el análisis
+          let textoCandidato = "";
+          if (Object.keys(respuestasFiltro).length > 0) {
+              textoCandidato += "DATOS CLAVE:\n";
+              if (respuestasFiltro.salario) textoCandidato += `- Salario: ${respuestasFiltro.salario}\n`;
+              if (respuestasFiltro.monitoreo) textoCandidato += `- Monitoreo: ${respuestasFiltro.monitoreo}\n`;
+              if (respuestasFiltro.disponibilidad) textoCandidato += `- Disponibilidad: ${respuestasFiltro.disponibilidad}\n`;
+              if (respuestasFiltro.herramientas) textoCandidato += `- Herramientas: ${respuestasFiltro.herramientas}\n`;
+              if (respuestasFiltro.logro_destacado) textoCandidato += `- Logro Destacado: ${respuestasFiltro.logro_destacado}\n`;
+          }
+          if (competenciasTecnicasArray.length > 0) {
+              textoCandidato += "\nCOMPETENCIAS TÉCNICAS:\n";
+              competenciasTecnicasArray.forEach(comp => {
+                  if (comp.competencia && comp.nivel) {
+                      textoCandidato += `- ${comp.competencia}: ${comp.nivel}\n`;
+                  }
+              });
+          }
+          if (habilidadesBlandasArray.length > 0) {
+              textoCandidato += "\nHABILIDADES BLANDAS:\n";
+              habilidadesBlandasArray.forEach(hab => {
+                  if (hab.habilidad && hab.nivel) {
+                      textoCandidato += `- ${hab.habilidad}: ${hab.nivel}\n`;
+                  }
+              });
+          }
+          
+          // Si no hay datos clave, usar el texto del CV como base
+          if (!textoCandidato.trim()) {
+              textoCandidato = textoCV.slice(0, 15000);
+          }
+
+          // 6.3. Generar score, motivos y alertas usando verificaConocimientosMinimos
+          console.log(`🤖 Generando score y análisis...`);
+          const analisisIA = await verificaConocimientosMinimos(
+              puesto || "Perfil Externo",
+              textoCandidato,
+              "", // declaraciones vacías para carga manual
+              reseñaCV, // reseña del CV
+              null // sin video para carga manual
+          );
+
+          // 6.4. Actualizar candidato con el análisis completo
+          await firestore.collection("CVs_staging").doc(safeIdFinal).update({
+              ia_score: analisisIA.score || null,
+              ia_motivos: analisisIA.motivos || null,
+              ia_alertas: analisisIA.alertas || [],
+              ia_status: "analyzed",
+              reseña_cv: reseñaCV || null,
+              actualizado_en: admin.firestore.FieldValue.serverTimestamp()
+          });
+
+          console.log(`✅ Análisis automático completado para: ${safeIdFinal} - Score: ${analisisIA.score}`);
+      } catch (error) {
+          console.error(`❌ Error ejecutando análisis automático para ${safeIdFinal}:`, error);
+          await firestore.collection("CVs_staging").doc(safeIdFinal).update({
+              ia_status: "error_analysis",
+              ia_motivos: `Error en análisis automático: ${error.message}`
+          });
+      }
+
       // Limpieza del archivo temporal local
       try { fs.unlinkSync(req.file.path); } catch(e) {}
 
-      console.log(`✅ Candidato manual guardado: ${safeIdFinal} - Análisis pendiente - Origen: ${nuevoCandidato.origen}`);
+      console.log(`✅ Candidato manual guardado y analizado: ${safeIdFinal} - Origen: ${nuevoCandidato.origen}`);
       res.json({ 
         ok: true, 
         id: safeIdFinal, 
