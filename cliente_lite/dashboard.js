@@ -4171,6 +4171,7 @@ const handleUpdateCandidate = async (id, updates) => {
         if (updates.stage === 'stage_2') {
             finalUpdates.assignedTo = currentUser; 
             finalUpdates.status_interno = 'interview_pending';
+            setActiveTab('stage_2'); // Cambiar la vista cuando se vuelve a Gestión
         }
 
         if (updates.stage === 'trash' || updates.stage === 'stage_3') {

@@ -1458,6 +1458,8 @@ app.post("/candidatos/:id/resumen", async (req, res) => {
             return res.status(500).json({ error: "Error de Gemini en proceso manual" });
         }
 
+        // Agregar fecha de generación al informe manual
+        informeManual.fecha_generacion = new Date().toISOString();
         return res.json(informeManual); // Enviamos directo al dashboard sin guardar en DB
     }
 
@@ -1474,7 +1476,14 @@ app.post("/candidatos/:id/resumen", async (req, res) => {
     // Si ya existe un informe guardado y no pedimos regenerar, lo devolvemos
     if (data.informe_final_data && (!manualData || !manualData.forceRegenerate)) {
         console.log("📄 Devolviendo informe ya existente desde Firestore.");
-        return res.json(data.informe_final_data);
+        // Si el informe existente no tiene fecha_generacion, agregarla usando la fecha de creación del documento
+        const informeExistente = { ...data.informe_final_data };
+        if (!informeExistente.fecha_generacion) {
+            // Intentar usar la fecha de creación del documento o la fecha actual
+            const fechaCreacion = doc.createTime ? doc.createTime.toDate().toISOString() : new Date().toISOString();
+            informeExistente.fecha_generacion = fechaCreacion;
+        }
+        return res.json(informeExistente);
     }
 
     // Si no hay informe, lo generamos usando los datos de Firestore
@@ -1512,6 +1521,9 @@ ${alertasPostEntrevista.length > 0 ? `ALERTAS DETECTADAS:\n${alertasPostEntrevis
     );
 
     if (informeGenerado) {
+        // Agregar fecha de generación al informe antes de guardarlo
+        informeGenerado.fecha_generacion = new Date().toISOString();
+        
         // Guardamos el informe en Firestore para que ya quede entrelazado
         await docRef.update({ 
             informe_final_data: informeGenerado,
