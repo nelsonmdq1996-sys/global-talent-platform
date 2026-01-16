@@ -2222,7 +2222,7 @@ function ReportsView({ candidates, setCurrentReport, onUpdate }) {
     const [selectedCandidateForHistory, setSelectedCandidateForHistory] = React.useState(null);
 
     // Filtrar solo candidatos con informe generado
-    const reportsWithData = candidates.filter(c => c.informe_final_data);
+    const reportsWithData = candidates.filter(c => c.informe_final_data && c.stage === 'stage_3');
     
     // Ordenar por fecha de creación (más recientes primero)
     const sortedReports = [...reportsWithData].sort((a, b) => {
@@ -4172,6 +4172,13 @@ const handleUpdateCandidate = async (id, updates) => {
             finalUpdates.assignedTo = currentUser; 
             finalUpdates.status_interno = 'interview_pending';
             setActiveTab('stage_2'); // Cambiar la vista cuando se vuelve a Gestión
+            
+            // Si el candidato venía de informes (tenía informe_final_data), 
+            // limpiar el informe para permitir regeneración cuando vuelva a stage_3
+            if (currentCandidate && currentCandidate.informe_final_data) {
+                finalUpdates.informe_final_data = null;
+                finalUpdates.report_generated = false;
+            }
         }
 
         if (updates.stage === 'trash' || updates.stage === 'stage_3') {
