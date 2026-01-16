@@ -693,9 +693,6 @@
         setMonitoreo("");
         setDisponibilidad("");
         setHerramientas("");
-        setLogroDestacado("");
-        setCompetenciasTecnicas([{ competencia: "", nivel: "" }]);
-        setHabilidadesBlandas([{ habilidad: "", nivel: "" }]);
         onClose();
     };
 
@@ -1310,15 +1307,16 @@ function TrashView({ candidates, onUpdate, onRefresh }) {
             </div>
 
             <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
-                <table className="w-full text-left border-collapse">
-                    <thead className="bg-slate-950/50 text-xs uppercase text-slate-500 font-bold tracking-wider">
-                        <tr>
-                            <th className="px-6 py-4 border-b border-slate-800">Candidato</th>
-                            <th className="px-6 py-4 border-b border-slate-800">Motivo de Descarte</th>
-                            <th className="px-6 py-4 border-b border-slate-800 text-right">Acción</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/50">
+                <div className="overflow-y-auto max-h-[calc(100vh-250px)] custom-scrollbar">
+                    <table className="w-full text-left border-collapse">
+                        <thead className="bg-slate-950 text-xs uppercase text-slate-500 font-bold tracking-wider sticky top-0 z-10">
+                            <tr>
+                                <th className="px-6 py-4 border-b border-slate-800">Candidato</th>
+                                <th className="px-6 py-4 border-b border-slate-800">Motivo de Descarte</th>
+                                <th className="px-6 py-4 border-b border-slate-800 text-right">Acción</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/50">
                         {discarded.length === 0 ? (
                             <tr>
                                 <td colSpan="3" className="p-8 text-center text-slate-500 italic">
@@ -1364,7 +1362,8 @@ function TrashView({ candidates, onUpdate, onRefresh }) {
                             ))
                         )}
                     </tbody>
-                </table>
+                    </table>
+                </div>
             </div>
         </div>
     );
