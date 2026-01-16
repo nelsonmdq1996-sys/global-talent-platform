@@ -3233,25 +3233,65 @@ async function generarResenaCV(textoCV, puesto) {
     
     1. 📉 FILTRO "RELEVANCIA PURA" (Peso Máximo):
        - Ignora la "experiencia total". Calcula solo la "Experiencia Útil": años en roles idénticos o directamente transferibles al puesto.
-       - Aplica DEVALUACIÓN INMEDIATA si la experiencia proviene de sectores operativos irrelevantes (Retail, Gastronomía, Atención presencial), etiquetándola como "Experiencia No Transferible".
+       - Aplica DEVALUACIÓN INMEDIATA si la experiencia proviene de sectores operativos irrelevantes (Retail, Gastronomía, Atención presencial, roles administrativos genéricos sin especialización), etiquetándola como "Experiencia No Transferible".
     
     2. 🏆 REGLA DE "RESULTADOS vs. FUNCIONES":
        - Analiza la redacción: ¿Usa verbos de acción ("Lideré", "Aumenté", "Creé") y menciona métricas (KPIs, % de mejora)?
        - PENALIZA severamente los CVs que sean "Listas de Supermercado" (solo listan tareas: "Encargado de...", "Realización de..."). Esto indica perfil operativo, no orientado a resultados.
     
-    3. 🎓 REGLA "ANTI-TITULITIS":
+    3. 🚩 REGLA DE "ESTABILIDAD Y PROFUNDIDAD":
+       - **Job Hopping**: Si el candidato tiene 4+ trabajos en menos de 5 años, o múltiples empleos de menos de 1 año de duración, PENALIZA fuertemente. Esto indica inestabilidad laboral o bajo desempeño.
+       - **Descripciones Escuetas**: Si cada puesto tiene solo 2-3 líneas de descripción sin profundizar en responsabilidades, PENALIZA. Esto señala experiencia superficial o falta de impacto real en el rol.
+       - **Gaps Temporales**: Si hay períodos de 6+ meses sin trabajar entre empleos sin explicación, márcalo como señal de alerta.
+       - **Falta de Especialización**: Si los roles son muy variados y sin hilo conductor claro, indica falta de expertise consolidado en un área específica.
+       - **Ocupación Actual**: Si el CV no especifica claramente si está trabajando actualmente o cuál es su situación laboral presente, menciónalo como falta de transparencia.
+    
+    4. 🎓 REGLA "ANTI-TITULITIS":
        - La formación académica y certificaciones son un plus, NO un reemplazo.
        - Si el candidato tiene muchos cursos/títulos pero poca experiencia práctica relevante, etiquétalo como "Perfil Teórico / Junior Académico". No permitas que los títulos inflen el seniority.
     
-    4. 📝 ESTRUCTURA Y SÍNTESIS:
+    5. 📝 ESTRUCTURA Y SÍNTESIS:
        - Evalúa la capacidad de comunicación del CV. Si es confuso, desordenado o contiene información de relleno ("exageraciones"), márcalo como una deficiencia en "Habilidades de Comunicación Escrita".
+    
+    CALIBRACIÓN DE SEVERIDAD (usa esto como guía interna para el tono):
+    
+    PERFIL BAJO (30-40): 
+    - Job hopping evidente (4+ trabajos en <5 años)
+    - Descripciones ultra escuetas sin profundidad
+    - Cero logros medibles o KPIs
+    - Roles dispersos sin especialización
+    - Gaps temporales sin explicar
+    → Tono: Muy crítico, múltiples señales de alerta
+    
+    PERFIL MEDIO-BAJO (50-60):
+    - Experiencia útil limitada (1-2 años reales para el rol)
+    - Algunos logros pero sin métricas concretas
+    - Estabilidad laboral aceptable
+    - CV con estructura básica pero sin destacarse
+    → Tono: Crítico moderado, cumple mínimos
+    
+    PERFIL SÓLIDO (70+):
+    - Experiencia útil consolidada (5+ años relevantes)
+    - Logros medibles con KPIs y resultados demostrables
+    - Estabilidad laboral clara
+    - Especialización en el área del puesto
+    → Tono: Positivo pero objetivo
     
     FORMATO DE SALIDA (Reseña de Auditoría):
     Redacta un párrafo de 3-5 líneas con tono analítico, DURO y objetivo.
     Céntrate en la discrepancia entre lo que el candidato "cree que vale" y lo que "realmente demuestra" según estos estándares.
+    SÉ ESPECIALMENTE SEVERO con CVs que acumulen múltiples señales de alerta (job hopping + descripciones escuetas + falta de logros).
     
-    Ejemplo de Tono Esperado:
-    "Perfil con experiencia inflada. Aunque presenta 5 años laborales, solo 18 meses son relevantes para este rol, siendo el resto experiencia operativa en retail no transferible. Su CV es una lista pasiva de funciones sin un solo logro medible ni KPI, denotando baja orientación a resultados. La certificación en Marketing no compensa la falta de ejecución práctica demostrable en campañas reales."
+    Ejemplos de tono según categoría:
+    
+    [PERFIL BAJO - 30-40]
+    "Perfil con señales críticas de inestabilidad laboral: múltiples empleos de corta duración en los últimos años, sugiriendo bajo desempeño o falta de compromiso. Las descripciones de cada rol son extremadamente escuetas sin un solo logro medible, evidenciando experiencia superficial tipo 'lista de supermercado'. La trayectoria carece de especialización clara, saltando entre roles dispersos sin consolidar expertise en ningún área. No especifica ocupación actual. Perfil de entrada con múltiples banderas rojas que requiere validación exhaustiva."
+    
+    [PERFIL MEDIO-BAJO - 50-60]
+    "Perfil con experiencia mixta. Aunque presenta trayectoria laboral de varios años, solo una fracción es directamente transferible al rol remoto solicitado. El CV muestra estabilidad moderada pero carece de logros medibles o KPIs que demuestren impacto real. Las descripciones se mantienen en el nivel funcional sin evidenciar orientación a resultados. Cumple requisitos mínimos pero sin elementos diferenciadores."
+    
+    [PERFIL SÓLIDO - 70+]
+    "Perfil con experiencia relevante consolidada en el área. Demuestra progresión clara con permanencia estable en roles similares al puesto objetivo. El CV evidencia orientación a resultados con logros específicos y métricas cuantificables. La especialización es clara y las habilidades técnicas están respaldadas por aplicación práctica demostrable."
     `;
     
     const result = await model.generateContent(prompt);
@@ -5054,7 +5094,7 @@ async function generarResenaVideo(videoUrl, puesto) {
     console.log(`${logPrefix} ✅ Archivo procesado y listo: ${file.state}`);
     
     // Ahora analizar el video con Gemini
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" }); // Usando modelo más reciente
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); // Usando modelo más reciente
     
     const prompt = `
     ACTÚA COMO: Headhunter Senior para Global Talent Connections.
