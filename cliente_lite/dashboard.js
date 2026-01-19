@@ -1206,17 +1206,31 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
                                             </span>
                                         </td>
                                         <td className="p-4 text-right">
-                                            <button 
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    onSelect(c.id);
-                                                }}
-                                                className="px-3 py-1.5 bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 hover:border-blue-500/50 text-blue-400 hover:text-blue-300 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 group shadow-sm hover:shadow-blue-500/20"
-                                            >
-                                                <Eye size={14} className="group-hover:scale-110 transition-transform"/>
-                                                Ver
-                                                <ChevronRight size={14} className="group-hover:translate-x-0.5 transition-transform"/>
-                                            </button>
+                                            <div className="flex items-center justify-end gap-2">
+                                                {/* Botón abrir en nueva pestaña */}
+                                                <button 
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        window.open(`${window.location.pathname}?candidato=${c.id}`, '_blank');
+                                                    }}
+                                                    title="Abrir en nueva pestaña"
+                                                    className="p-1.5 hover:bg-slate-700 rounded-lg transition-colors text-slate-500 hover:text-slate-300"
+                                                >
+                                                    <ExternalLink size={14} />
+                                                </button>
+                                                {/* Botón ver ficha */}
+                                                <button 
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onSelect(c.id);
+                                                    }}
+                                                    className="px-3 py-1.5 bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 hover:border-blue-500/50 text-blue-400 hover:text-blue-300 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 group shadow-sm hover:shadow-blue-500/20"
+                                                >
+                                                    <Eye size={14} className="group-hover:scale-110 transition-transform"/>
+                                                    Ver
+                                                    <ChevronRight size={14} className="group-hover:translate-x-0.5 transition-transform"/>
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -1386,7 +1400,19 @@ function ManageView({ candidates, onSelect, currentUser }) {
                                                 ) : <span className="text-xs text-slate-600 italic">Sin asignar</span>}
                                             </td>
                                             <td className="px-6 py-3 text-right">
-                                                <ChevronRight size={16} className="ml-auto text-slate-600 group-hover:text-white transition-transform group-hover:translate-x-1"/>
+                                                <div className="flex items-center justify-end gap-2">
+                                                    <button 
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            window.open(`${window.location.pathname}?candidato=${c.id}`, '_blank');
+                                                        }}
+                                                        title="Abrir en nueva pestaña"
+                                                        className="p-1.5 hover:bg-slate-700 rounded-lg transition-colors text-slate-500 hover:text-slate-300"
+                                                    >
+                                                        <ExternalLink size={14} />
+                                                    </button>
+                                                    <ChevronRight size={16} className="text-slate-600 group-hover:text-white transition-transform group-hover:translate-x-1"/>
+                                                </div>
                                             </td>
                                         </tr>
                                     );
@@ -4434,6 +4460,18 @@ function App() {
             }
         }
     }, []); // Solo se ejecuta al montar el componente
+
+     // 1.6. LEER CANDIDATO DESDE URL (para abrir en nueva pestaña)
+     useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const candidatoId = params.get('candidato');
+        if (candidatoId) {
+            console.log('🔗 Abriendo candidato desde URL:', candidatoId);
+            setSelectedCandidateId(candidatoId);
+            // Limpiar la URL para que no quede el parámetro visible
+            // window.history.replaceState({}, '', window.location.pathname);
+        }
+    }, []);
 
     // 2. FUNCIÓN DE CARGA
     const cargarDatos = async (forceRefresh = false) => {
