@@ -115,7 +115,10 @@ const api = {
                         process_step_3_result: c.process_step_3_result || null,
                         
                         // 🔧 SOLUCIÓN TEMPORAL: Campo para saltar Form2
-                        skip_form2: c.skip_form2 || false
+                        skip_form2: c.skip_form2 || false,
+                        
+                        // ⭐ SISTEMA DE MARCADORES
+                        marcadores: c.marcadores || []
                     }));
                     
                     // Devolver con información de paginación
