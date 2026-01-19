@@ -524,7 +524,49 @@
                                                 <div className="flex items-center gap-3">
                                                     <Avatar name={c.nombre} size="sm"/>
                                                     <div>
-                                                        <p className="font-bold text-sm text-white">{c.nombre}</p>
+                                                        <div className="flex items-center gap-2">
+                                                            <p className="font-bold text-sm text-white">{c.nombre}</p>
+                                                            {/* Badge de Marcadores */}
+                                                            {c.marcadores && c.marcadores.length > 0 && (() => {
+                                                                const primerMarcador = c.marcadores[0];
+                                                                const iconos = {
+                                                                    estrella: { icon: '⭐', bg: 'bg-yellow-500/20', text: 'text-yellow-400', border: 'border-yellow-500/30' },
+                                                                    redflag: { icon: '🚩', bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30' },
+                                                                    warning: { icon: '⚠️', bg: 'bg-orange-500/20', text: 'text-orange-400', border: 'border-orange-500/30' },
+                                                                    info: { icon: 'ℹ️', bg: 'bg-blue-500/20', text: 'text-blue-400', border: 'border-blue-500/30' }
+                                                                };
+                                                                const estilo = iconos[primerMarcador.tipo] || iconos.info;
+                                                                return (
+                                                                    <div className="relative group">
+                                                                        <span className={`inline-block px-1.5 py-0.5 ${estilo.bg} ${estilo.text} text-[9px] font-bold rounded shadow-sm whitespace-nowrap border ${estilo.border} cursor-help`}>
+                                                                            {estilo.icon} {c.marcadores.length}
+                                                                        </span>
+                                                                    {/* Tooltip */}
+                                                                    <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block z-50 w-64">
+                                                                        <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 shadow-xl">
+                                                                            <div className="text-xs font-bold text-yellow-400 mb-2">Marcadores:</div>
+                                                                            <div className="space-y-2">
+                                                                                {c.marcadores.map((m, idx) => {
+                                                                                    const iconos = {
+                                                                                        estrella: '⭐',
+                                                                                        redflag: '🚩',
+                                                                                        warning: '⚠️',
+                                                                                        info: 'ℹ️'
+                                                                                    };
+                                                                                    return (
+                                                                                        <div key={idx} className="text-[10px] text-slate-300">
+                                                                                            <span className="text-yellow-400">{iconos[m.tipo] || 'ℹ️'}</span> {m.razon}
+                                                                                            <div className="text-[9px] text-slate-500 mt-0.5">Por: {m.usuario}</div>
+                                                                                        </div>
+                                                                                    );
+                                                                                })}
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                            })()}
+                                                        </div>
                                                         <p className="text-xs text-slate-500">{c.email}</p>
                                                     </div>
                                                 </div>
@@ -1097,6 +1139,46 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
                                                                 MANUAL
                                                             </span>
                                                         )}
+                                                        {/* Badge de Marcadores */}
+                                                        {c.marcadores && c.marcadores.length > 0 && (() => {
+                                                            const primerMarcador = c.marcadores[0];
+                                                            const iconos = {
+                                                                estrella: { icon: '⭐', bg: 'bg-yellow-500/20', text: 'text-yellow-400', border: 'border-yellow-500/30' },
+                                                                redflag: { icon: '🚩', bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30' },
+                                                                warning: { icon: '⚠️', bg: 'bg-orange-500/20', text: 'text-orange-400', border: 'border-orange-500/30' },
+                                                                info: { icon: 'ℹ️', bg: 'bg-blue-500/20', text: 'text-blue-400', border: 'border-blue-500/30' }
+                                                            };
+                                                            const estilo = iconos[primerMarcador.tipo] || iconos.info;
+                                                            return (
+                                                                <div className="relative group">
+                                                                    <span className={`inline-block px-1.5 py-0.5 ${estilo.bg} ${estilo.text} text-[9px] font-bold rounded shadow-sm whitespace-nowrap border ${estilo.border} cursor-help`}>
+                                                                        {estilo.icon} {c.marcadores.length}
+                                                                    </span>
+                                                                {/* Tooltip */}
+                                                                <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block z-50 w-64">
+                                                                    <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 shadow-xl">
+                                                                        <div className="text-xs font-bold text-yellow-400 mb-2">Marcadores:</div>
+                                                                        <div className="space-y-2">
+                                                                            {c.marcadores.map((m, idx) => {
+                                                                                const iconos = {
+                                                                                    estrella: '⭐',
+                                                                                    redflag: '🚩',
+                                                                                    warning: '⚠️',
+                                                                                    info: 'ℹ️'
+                                                                                };
+                                                                                return (
+                                                                                    <div key={idx} className="text-[10px] text-slate-300">
+                                                                                        <span className="text-yellow-400">{iconos[m.tipo] || 'ℹ️'}</span> {m.razon}
+                                                                                        <div className="text-[9px] text-slate-500 mt-0.5">Por: {m.usuario}</div>
+                                                                                    </div>
+                                                                                );
+                                                                            })}
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                            );
+                                                            })()}
                                                     </div>
                                                     <p className="text-xs text-slate-500 truncate">{c.email || "S/E"}</p>
                                                 </div>
@@ -1244,7 +1326,49 @@ function ManageView({ candidates, onSelect, currentUser }) {
                                                 <div className="flex items-center gap-3">
                                                     <Avatar name={normalizarNombre(c.nombre)} />
                                                     <div>
-                                                        <span className="font-bold text-slate-200 text-sm group-hover:text-white">{normalizarNombre(c.nombre)}</span>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="font-bold text-slate-200 text-sm group-hover:text-white">{normalizarNombre(c.nombre)}</span>
+                                                            {/* Badge de Marcadores */}
+                                                            {c.marcadores && c.marcadores.length > 0 && (() => {
+                                                                const primerMarcador = c.marcadores[0];
+                                                                const iconos = {
+                                                                    estrella: { icon: '⭐', bg: 'bg-yellow-500/20', text: 'text-yellow-400', border: 'border-yellow-500/30' },
+                                                                    redflag: { icon: '🚩', bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30' },
+                                                                    warning: { icon: '⚠️', bg: 'bg-orange-500/20', text: 'text-orange-400', border: 'border-orange-500/30' },
+                                                                    info: { icon: 'ℹ️', bg: 'bg-blue-500/20', text: 'text-blue-400', border: 'border-blue-500/30' }
+                                                                };
+                                                                const estilo = iconos[primerMarcador.tipo] || iconos.info;
+                                                                return (
+                                                                    <div className="relative group">
+                                                                        <span className={`inline-block px-1.5 py-0.5 ${estilo.bg} ${estilo.text} text-[9px] font-bold rounded shadow-sm whitespace-nowrap border ${estilo.border} cursor-help`}>
+                                                                            {estilo.icon} {c.marcadores.length}
+                                                                        </span>
+                                                                    {/* Tooltip */}
+                                                                    <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block z-50 w-64">
+                                                                        <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 shadow-xl">
+                                                                            <div className="text-xs font-bold text-yellow-400 mb-2">Marcadores:</div>
+                                                                            <div className="space-y-2">
+                                                                                {c.marcadores.map((m, idx) => {
+                                                                                    const iconos = {
+                                                                                        estrella: '⭐',
+                                                                                        redflag: '🚩',
+                                                                                        warning: '⚠️',
+                                                                                        info: 'ℹ️'
+                                                                                    };
+                                                                                    return (
+                                                                                        <div key={idx} className="text-[10px] text-slate-300">
+                                                                                            <span className="text-yellow-400">{iconos[m.tipo] || 'ℹ️'}</span> {m.razon}
+                                                                                            <div className="text-[9px] text-slate-500 mt-0.5">Por: {m.usuario}</div>
+                                                                                        </div>
+                                                                                    );
+                                                                                })}
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                            })()}
+                                                        </div>
                                                         <p className="text-[10px] text-slate-500">{c.email}</p>
                                                     </div>
                                                 </div>
@@ -1332,7 +1456,49 @@ function TrashView({ candidates, onUpdate, onRefresh }) {
                                                 {c.nombre.charAt(0)}
                                             </div>
                                             <div>
-                                                <span className="font-bold text-slate-300 text-sm block">{c.nombre}</span>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-bold text-slate-300 text-sm block">{c.nombre}</span>
+                                                    {/* Badge de Marcadores */}
+                                                    {c.marcadores && c.marcadores.length > 0 && (() => {
+                                                        const primerMarcador = c.marcadores[0];
+                                                        const iconos = {
+                                                            estrella: { icon: '⭐', bg: 'bg-yellow-500/20', text: 'text-yellow-400', border: 'border-yellow-500/30' },
+                                                            redflag: { icon: '🚩', bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30' },
+                                                            warning: { icon: '⚠️', bg: 'bg-orange-500/20', text: 'text-orange-400', border: 'border-orange-500/30' },
+                                                            info: { icon: 'ℹ️', bg: 'bg-blue-500/20', text: 'text-blue-400', border: 'border-blue-500/30' }
+                                                        };
+                                                        const estilo = iconos[primerMarcador.tipo] || iconos.info;
+                                                        return (
+                                                            <div className="relative group">
+                                                                <span className={`inline-block px-1.5 py-0.5 ${estilo.bg} ${estilo.text} text-[9px] font-bold rounded shadow-sm whitespace-nowrap border ${estilo.border} cursor-help`}>
+                                                                    {estilo.icon} {c.marcadores.length}
+                                                                </span>
+                                                            {/* Tooltip */}
+                                                            <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block z-50 w-64">
+                                                                <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 shadow-xl">
+                                                                    <div className="text-xs font-bold text-yellow-400 mb-2">Marcadores:</div>
+                                                                    <div className="space-y-2">
+                                                                        {c.marcadores.map((m, idx) => {
+                                                                            const iconos = {
+                                                                                estrella: '⭐',
+                                                                                redflag: '🚩',
+                                                                                warning: '⚠️',
+                                                                                info: 'ℹ️'
+                                                                            };
+                                                                            return (
+                                                                                <div key={idx} className="text-[10px] text-slate-300">
+                                                                                    <span className="text-yellow-400">{iconos[m.tipo] || 'ℹ️'}</span> {m.razon}
+                                                                                    <div className="text-[9px] text-slate-500 mt-0.5">Por: {m.usuario}</div>
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                    })()}
+                                                </div>
                                                 <span className="text-[10px] text-slate-500">{c.puesto}</span>
                                             </div>
                                         </div>
@@ -2564,6 +2730,11 @@ function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
     const [form2Status, setForm2Status] = useState(candidate.process_step_2_form || "pending"); // pending, sent, received
     const [finalResult, setFinalResult] = useState(candidate.process_step_3_result || null); // qualified, disqualified
 
+    // ⭐ ESTADOS PARA SISTEMA DE MARCADORES
+    const [showMarcadorModal, setShowMarcadorModal] = useState(false);
+    const [marcadorTipo, setMarcadorTipo] = useState('estrella');
+    const [marcadorRazon, setMarcadorRazon] = useState('');
+
     // 🔥 SINCRONIZAR ESTADOS CUANDO CANDIDATE CAMBIA (para que persistan después de F5)
     React.useEffect(() => {
         if (candidate.meet_link) {
@@ -2755,6 +2926,45 @@ function CandidateDetail({ candidate, onBack, onUpdate, currentUser }) {
     // 2. Guardar Transcripción (misma lógica que saveLinks)
     const saveTranscript = () => {
         onUpdate(candidate.id, { interview_transcript: transcript });
+    };
+
+    // ⭐ FUNCIONES PARA SISTEMA DE MARCADORES
+    // Función para agregar marcador (SOLO PERMITIDO EN STAGE_1)
+    const handleAgregarMarcador = () => {
+        if (candidate.stage !== 'stage_1') {
+            return alert("⚠️ Los marcadores solo se pueden agregar en la etapa de Exploración (Stage 1).");
+        }
+        
+        if (!marcadorRazon.trim()) {
+            return alert("⚠️ Por favor escribe una razón para el marcador.");
+        }
+        
+        const nuevoMarcador = {
+            tipo: marcadorTipo,
+            razon: marcadorRazon.trim(),
+            usuario: currentUser || 'Sistema',
+            fecha: new Date().toISOString()
+        };
+        
+        const marcadoresActuales = candidate.marcadores || [];
+        const nuevosMarcadores = [...marcadoresActuales, nuevoMarcador];
+        
+        onUpdate(candidate.id, { marcadores: nuevosMarcadores });
+        
+        // Limpiar formulario
+        setMarcadorRazon('');
+        setMarcadorTipo('estrella');
+        setShowMarcadorModal(false);
+    };
+    
+    // Función para eliminar marcador
+    const handleEliminarMarcador = (index) => {
+        if (!confirm("¿Estás seguro de eliminar este marcador?")) return;
+        
+        const marcadoresActuales = candidate.marcadores || [];
+        const nuevosMarcadores = marcadoresActuales.filter((_, i) => i !== index);
+        
+        onUpdate(candidate.id, { marcadores: nuevosMarcadores });
     };
 
 // ==========================================
@@ -3455,6 +3665,80 @@ const handleConfirmDisqualified = () => {
                                 </div>
                             </div>
                         </Card>
+
+                            {/* ⭐ SISTEMA DE MARCADORES (COMPACTO) */}
+                            <Card className="p-4 bg-slate-900 border-slate-800">
+                                <div className="flex justify-between items-center mb-3">
+                                    <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Marcadores</h3>
+                                    {/* Solo mostrar botón de agregar si está en Stage 1 */}
+                                    {candidate.stage === 'stage_1' && (
+                                        <button
+                                            onClick={() => setShowMarcadorModal(true)}
+                                            className="text-[10px] text-blue-400 hover:text-blue-300 flex items-center gap-1"
+                                        >
+                                            <span>+</span>
+                                        </button>
+                                    )}
+                                </div>
+
+                                {(!candidate.marcadores || candidate.marcadores.length === 0) ? (
+                                    <div className="text-center py-4 border-2 border-dashed border-slate-800 rounded-lg">
+                                        <p className="text-[10px] text-slate-500">
+                                            {candidate.stage === 'stage_1' ? 'Sin marcadores' : 'N/A'}
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
+                                        {candidate.marcadores.map((marcador, index) => {
+                                            const colores = {
+                                                estrella: { bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', text: 'text-yellow-400', icon: '⭐' },
+                                                redflag: { bg: 'bg-red-500/10', border: 'border-red-500/30', text: 'text-red-400', icon: '🚩' },
+                                                info: { bg: 'bg-blue-500/10', border: 'border-blue-500/30', text: 'text-blue-400', icon: 'ℹ️' },
+                                                warning: { bg: 'bg-orange-500/10', border: 'border-orange-500/30', text: 'text-orange-400', icon: '⚠️' }
+                                            };
+                                            const color = colores[marcador.tipo] || colores.info;
+
+                                            return (
+                                                <div
+                                                    key={index}
+                                                    className={`p-2 rounded border ${color.bg} ${color.border} group relative cursor-help`}
+                                                    title={`${marcador.razon} | Por: ${marcador.usuario}`}
+                                                >
+                                                    <div className="flex items-start justify-between gap-1">
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-1.5 mb-1">
+                                                                <span className="text-sm">{color.icon}</span>
+                                                                <span className={`text-[10px] font-bold uppercase ${color.text} truncate`}>
+                                                                    {marcador.tipo === 'estrella' ? 'Destacado' :
+                                                                     marcador.tipo === 'redflag' ? 'Red Flag' :
+                                                                     marcador.tipo === 'warning' ? 'Advertencia' : 'Info'}
+                                                                </span>
+                                                            </div>
+                                                            <p className="text-[10px] text-slate-300 line-clamp-2 mb-1">{marcador.razon}</p>
+                                                            <div className="text-[9px] text-slate-500 truncate">
+                                                                {marcador.usuario}
+                                                            </div>
+                                                        </div>
+                                                        {/* Solo permitir eliminar en Stage 1 */}
+                                                        {candidate.stage === 'stage_1' && (
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    handleEliminarMarcador(index);
+                                                                }}
+                                                                className="text-slate-500 hover:text-red-400 transition-colors text-[10px] opacity-0 group-hover:opacity-100 flex-shrink-0"
+                                                                title="Eliminar marcador"
+                                                            >
+                                                                ✕
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </Card>
                     </div>
 
                     {/* COLUMNA DERECHA */}
@@ -3828,6 +4112,78 @@ const handleConfirmDisqualified = () => {
                    </div>
                </div>
            )}
+
+            {/* Modal de Agregar Marcador */}
+            {showMarcadorModal && (
+                <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowMarcadorModal(false)}>
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-md shadow-2xl animate-in zoom-in duration-200" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                ⭐ Agregar Marcador
+                            </h3>
+                            <button 
+                                onClick={() => setShowMarcadorModal(false)} 
+                                className="text-slate-400 hover:text-white transition-colors text-xl leading-none"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">Tipo de Marcador</label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {[
+                                        { valor: 'estrella', label: '⭐ Destacado', desc: 'Candidato conocido o destacado' },
+                                        { valor: 'redflag', label: '🚩 Bandera Roja', desc: 'Problemas o alertas' },
+                                        { valor: 'warning', label: '⚠️ Advertencia', desc: 'Atención requerida' },
+                                        { valor: 'info', label: 'ℹ️ Información', desc: 'Nota adicional' }
+                                    ].map(tipo => (
+                                        <button
+                                            key={tipo.valor}
+                                            onClick={() => setMarcadorTipo(tipo.valor)}
+                                            className={`p-3 rounded-lg border text-left transition-all ${
+                                                marcadorTipo === tipo.valor
+                                                    ? 'bg-blue-500/20 border-blue-500/50'
+                                                    : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                                            }`}
+                                        >
+                                            <div className="text-sm font-bold text-white mb-1">{tipo.label}</div>
+                                            <div className="text-[10px] text-slate-400">{tipo.desc}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">Razón *</label>
+                                <textarea
+                                    value={marcadorRazon}
+                                    onChange={(e) => setMarcadorRazon(e.target.value)}
+                                    placeholder="Escribe la razón del marcador..."
+                                    className="w-full h-24 bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-blue-500 resize-none"
+                                />
+                            </div>
+                            
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setShowMarcadorModal(false)}
+                                    className="flex-1 px-4 py-2 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700 transition-colors text-sm font-bold"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={handleAgregarMarcador}
+                                    disabled={!marcadorRazon.trim()}
+                                    className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-bold"
+                                >
+                                    Agregar Marcador
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
        </div>
    );
 }
@@ -4126,6 +4482,11 @@ const handleUpdateCandidate = async (id, updates) => {
         // 2. Buscamos al candidato ACTUAL para ver su estado hoy
         const currentCandidate = candidates.find(c => c.id === id);
 
+        // 🔥 PRESERVAR MARCADORES: Si no se están modificando explícitamente, incluir los existentes
+        if (!updates.hasOwnProperty('marcadores') && currentCandidate && currentCandidate.marcadores) {
+            finalUpdates.marcadores = currentCandidate.marcadores;
+        }
+
         // 3. Lógica de Negocio: Asignaciones automáticas
         if (updates.stage === 'stage_2') {
             finalUpdates.assignedTo = currentUser; 
@@ -4160,14 +4521,15 @@ const handleUpdateCandidate = async (id, updates) => {
         }));
 
         // 6. Actualizamos la BASE DE DATOS (Backend)
-        // Ahora finalUpdates lleva el dato 'viewed' correcto
+        // Ahora finalUpdates lleva el dato 'viewed' correcto y los marcadores preservados
         await api.candidates.update(id, finalUpdates);
         
         // 7. Si se movió a papelera, recargar candidatos para asegurar que aparezca en la vista de papelera
+        // Esperamos un poco más para asegurar que el backend haya procesado la actualización con los marcadores
         if (updates.stage === 'trash') {
             setTimeout(() => {
                 cargarDatos(true); // Forzar recarga
-            }, 500);
+            }, 1000); // Aumentado a 1 segundo para dar tiempo al backend
         }
     };
 
