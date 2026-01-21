@@ -493,7 +493,8 @@
             "Asistente Desarrollador Odoo + Shopify",
             "Asistente Programador web (Power BI + Integración ERP/CRM",
             "Asistente de Seguridad y Salud Laboral",
-            "Asistente de Operaciones Comerciales"
+            "Asistente de Operaciones Comerciales",
+            "Asistente de Comercio Exterior"
         ];
 
         // --- NUEVA VISTA: BUSQUEDA Y TRACKING ---
