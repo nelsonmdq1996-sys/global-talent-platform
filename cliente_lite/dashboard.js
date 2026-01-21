@@ -492,7 +492,8 @@
             "Asistente Comercial - Remodelaciones, Reformas y Construcción",
             "Asistente Desarrollador Odoo + Shopify",
             "Asistente Programador web (Power BI + Integración ERP/CRM",
-            "Asistente de Seguridad y Salud Laboral"
+            "Asistente de Seguridad y Salud Laboral",
+            "Asistente de Operaciones Comerciales"
         ];
 
         // --- NUEVA VISTA: BUSQUEDA Y TRACKING ---
@@ -3692,67 +3693,87 @@ const handleConfirmDisqualified = () => {
                                     </div>
                                 )}
                                 <div className="flex items-center gap-4 p-4 rounded-xl border border-slate-800 bg-slate-950 hover:border-blue-500/50 hover:bg-slate-900 transition-all group">
-                                    <a href={candidate.cv_url} target="_blank" className="flex items-center gap-4 flex-1 cursor-pointer">
-                                        <div className="w-10 h-10 rounded-full bg-blue-600/20 flex items-center justify-center text-blue-500 group-hover:scale-110 transition-transform"><FileText size={20}/></div>
-                                        <div className="flex-1">
-                                            <h4 className="text-sm font-bold text-white">Curriculum Vitae</h4>
-                                            <p className="text-xs text-blue-500 group-hover:underline">
-                                                {candidate.cv_url && candidate.cv_url.length > 5 ? "Ver Documento" : "Link no disponible"}
-                                            </p>
-                                        </div>
-                                    </a>
-                                    {/* 🔧 BOTÓN DE REPARACIÓN: Solo mostrar si hay reseña_cv pero no cv_url */}
-                                    {candidate.reseña_cv && (!candidate.cv_url || candidate.cv_url.length <= 5) && (
-                                        <button
-                                            onClick={async () => {
-                                                if (isReparandoCV) return; // Prevenir múltiples clics
-                                                if (!confirm("¿Buscar y enlazar el CV en Storage? Esto también recalculará el score si es necesario.")) return;
-                                                
-                                                setIsReparandoCV(true); // Activar estado de carga
-                                                
-                                                try {
-                                                    const result = await api.candidates.repararCV(candidate.id);
-                                                    if (result.ok) {
-                                                        alert(`✅ ${result.mensaje}\n\nScore: ${result.datos.score_anterior} → ${result.datos.score_nuevo}`);
-                                                        // Recargar datos del candidato
-                                                        const data = await api.candidates.list();
-                                                        const lista = data.candidatos || data || [];
-                                                        const candidatoActualizado = lista.find(c => c.id === candidate.id);
-                                                        if (candidatoActualizado) {
-                                                            onUpdate(candidate.id, {
-                                                                cv_url: candidatoActualizado.cv_url,
-                                                                tiene_pdf: candidatoActualizado.tiene_pdf,
-                                                                ia_score: candidatoActualizado.ia_score,
-                                                                ia_motivos: candidatoActualizado.ia_motivos,
-                                                                ia_alertas: candidatoActualizado.ia_alertas,
-                                                                ia_status: candidatoActualizado.ia_status
-                                                            });
-                                                        }
-                                                    } else {
-                                                        alert(`❌ ${result.error || result.mensaje || "Error al reparar CV"}`);
-                                                    }
-                                                } catch (error) {
-                                                    console.error("Error reparando CV:", error);
-                                                    alert("❌ Error al reparar CV. Revisa la consola.");
-                                                } finally {
-                                                    setIsReparandoCV(false); // Desactivar estado de carga
-                                                }
-                                            }}
-                                            disabled={isReparandoCV}
-                                            className={`px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded border border-amber-400 flex items-center gap-2 transition-all shadow-lg shadow-amber-900/20 ${isReparandoCV ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                            title={isReparandoCV ? "Buscando CV en Storage..." : "Buscar CV en Storage y enlazarlo"}
-                                        >
-                                            {isReparandoCV ? (
-                                                <>
-                                                    <Loader2 size={14} className="animate-spin"/> Buscando...
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <Wrench size={14}/> Reparar CV
-                                                </>
-                                            )}
-                                        </button>
-                                    )}
+                                    <div className="w-10 h-10 rounded-full bg-blue-600/20 flex items-center justify-center text-blue-500 group-hover:scale-110 transition-transform"><FileText size={20}/></div>
+                                    <div className="flex-1">
+                                        <h4 className="text-sm font-bold text-white">Curriculum Vitae</h4>
+                                        {/* Link al CV o mensaje de no disponible */}
+                                        {candidate.cv_url && candidate.cv_url.length > 5 ? (
+                                            <a href={candidate.cv_url} target="_blank" className="text-xs text-blue-500 hover:underline">
+                                                Ver Documento
+                                            </a>
+                                        ) : (
+                                            <p className="text-xs text-slate-500">Link no disponible</p>
+                                        )}
+                                        
+                                        {/* 🔧 BOTONES DE REPARACIÓN - Solo si hay problemas con el CV */}
+                                        {(!candidate.tiene_pdf || !candidate.cv_url || candidate.cv_url.length <= 5 || (!candidate.texto_extraido && candidate.ia_score === 0)) && (
+                                            <div className="flex items-center gap-2 mt-1">
+                                                {/* Reparar desde Storage */}
+                                                {candidate.reseña_cv && (!candidate.cv_url || candidate.cv_url.length <= 5) && (
+                                                    <button
+                                                        onClick={async () => {
+                                                            if (isReparandoCV) return;
+                                                            setIsReparandoCV(true);
+                                                            try {
+                                                                const result = await api.candidates.repararCV(candidate.id);
+                                                                if (result.ok) {
+                                                                    alert(`✅ ${result.mensaje}`);
+                                                                    const data = await api.candidates.list();
+                                                                    const lista = data.candidatos || data || [];
+                                                                    const actualizado = lista.find(c => c.id === candidate.id);
+                                                                    if (actualizado) onUpdate(candidate.id, actualizado);
+                                                                } else {
+                                                                    alert(`❌ ${result.error || result.mensaje}`);
+                                                                }
+                                                            } catch (error) {
+                                                                alert("❌ Error al reparar CV");
+                                                            } finally {
+                                                                setIsReparandoCV(false);
+                                                            }
+                                                        }}
+                                                        disabled={isReparandoCV}
+                                                        className="text-[10px] text-amber-400 hover:text-amber-300 flex items-center gap-1 disabled:opacity-50"
+                                                        title="Buscar en Storage"
+                                                    >
+                                                        {isReparandoCV ? <Loader2 size={10} className="animate-spin"/> : <Wrench size={10}/>}
+                                                        Storage
+                                                    </button>
+                                                )}
+
+                                                {/* Reparar desde WorkDrive */}
+                                                {(!candidate.tiene_pdf || (!candidate.texto_extraido && candidate.ia_score === 0)) && (
+                                                    <button
+                                                        onClick={async () => {
+                                                            if (isReparandoCV) return;
+                                                            setIsReparandoCV(true);
+                                                            try {
+                                                                const result = await api.candidates.repararDesdeWorkDrive(candidate.id);
+                                                                if (result.ok) {
+                                                                    alert(`✅ ${result.mensaje}\nArchivo: ${result.datos.archivo_encontrado}`);
+                                                                    const data = await api.candidates.list();
+                                                                    const lista = data.candidatos || data || [];
+                                                                    const actualizado = lista.find(c => c.id === candidate.id);
+                                                                    if (actualizado) onUpdate(candidate.id, actualizado);
+                                                                } else {
+                                                                    alert(`❌ ${result.error || result.mensaje}`);
+                                                                }
+                                                            } catch (error) {
+                                                                alert("❌ Error al recuperar de WorkDrive");
+                                                            } finally {
+                                                                setIsReparandoCV(false);
+                                                            }
+                                                        }}
+                                                        disabled={isReparandoCV}
+                                                        className="text-[10px] text-purple-400 hover:text-purple-300 flex items-center gap-1 disabled:opacity-50"
+                                                        title="Buscar en WorkDrive (backup)"
+                                                    >
+                                                        {isReparandoCV ? <Loader2 size={10} className="animate-spin"/> : <CloudDownload size={10}/>}
+                                                        WorkDrive
+                                                    </button>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                                 <div className={`flex items-center gap-4 p-4 rounded-xl border border-slate-800 bg-slate-950 transition-all group ${!candidate.video_url || !candidate.video_url.startsWith('http') ? 'opacity-50' : ''} ${isAnalyzingVideo ? 'border-purple-500/50 bg-purple-500/5' : ''}`}>
                                     <div className="w-10 h-10 rounded-full bg-purple-600/20 flex items-center justify-center text-purple-500 group-hover:scale-110 transition-transform">
@@ -3767,15 +3788,50 @@ const handleConfirmDisqualified = () => {
                                                 </span>
                                             )}
                                         </h4>
-                                        <p className="text-xs text-purple-400 group-hover:underline">
-                                            {isAnalyzingVideo ? 'Procesando video con IA...' :
-                                             !candidate.video_url ? 'No disponible' : 
-                                             candidate.video_url.startsWith('http') ? (
-                                                 <a href={candidate.video_url} target="_blank" className="hover:underline">Abrir Link Externo</a>
-                                             ) : 
-                                             candidate.video_tipo === 'archivo' ? 'Video subido (ver en Zoho)' : 
-                                             'Link no válido'}
-                                        </p>
+                                        {/* Link al video o mensaje de no disponible */}
+                                        {candidate.video_url && candidate.video_url.startsWith('http') ? (
+                                            <a href={candidate.video_url} target="_blank" className="text-xs text-purple-400 hover:underline">
+                                                Abrir Link Externo
+                                            </a>
+                                        ) : (
+                                            <p className="text-xs text-slate-500">
+                                                {candidate.video_tipo === 'archivo' ? 'Video subido (ver en Zoho)' : 'No disponible'}
+                                            </p>
+                                        )}
+                                        
+                                        {/* 🎥 BOTÓN REPARAR VIDEO - Solo si no hay video válido */}
+                                        {(!candidate.video_url || !candidate.video_url.startsWith('http')) && (
+                                            <div className="flex items-center gap-2 mt-1">
+                                                <button
+                                                    onClick={async () => {
+                                                        if (isReparandoCV) return;
+                                                        setIsReparandoCV(true);
+                                                        try {
+                                                            const result = await api.candidates.repararVideoDesdeWorkDrive(candidate.id);
+                                                            if (result.ok) {
+                                                                alert(`✅ ${result.mensaje}\nArchivo: ${result.datos.archivo_encontrado}`);
+                                                                const data = await api.candidates.list();
+                                                                const lista = data.candidatos || data || [];
+                                                                const actualizado = lista.find(c => c.id === candidate.id);
+                                                                if (actualizado) onUpdate(candidate.id, actualizado);
+                                                            } else {
+                                                                alert(`❌ ${result.error || result.mensaje}`);
+                                                            }
+                                                        } catch (error) {
+                                                            alert("❌ Error al recuperar video de WorkDrive");
+                                                        } finally {
+                                                            setIsReparandoCV(false);
+                                                        }
+                                                    }}
+                                                    disabled={isReparandoCV}
+                                                    className="text-[10px] text-purple-400 hover:text-purple-300 flex items-center gap-1 disabled:opacity-50"
+                                                    title="Buscar video en WorkDrive (backup)"
+                                                >
+                                                    {isReparandoCV ? <Loader2 size={10} className="animate-spin"/> : <CloudDownload size={10}/>}
+                                                    WorkDrive
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>

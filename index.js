@@ -22,6 +22,12 @@ const { google } = require("googleapis");
 const nodemailer = require("nodemailer");
 require("dotenv").config();
 const fichaGenerator = require("./services/fichaGenerator");
+const { 
+  buscarArchivoEnWorkDrive, 
+  buscarVideoEnWorkDrive,
+  descargarArchivoDeWorkDrive 
+} = require('./zohoWorkDrive');
+
 
 // ========================================================================
 // 📧 CONFIGURACIÓN DE NODEMAILER (PARA ENVÍO DE EMAILS CON HTML)
@@ -4169,6 +4175,402 @@ app.post("/candidatos/:id/reparar-cv", async (req, res) => {
     
   } catch (error) {
     console.error("❌ [REPARAR] Error en reparación:", error);
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// ==========================================================================
+// 🔧 ENDPOINT: REPARAR CV DESDE WORKDRIVE (NUEVO)
+// ==========================================================================
+// Busca el CV en el backup de WorkDrive y lo reprocesa completamente
+
+app.post("/candidatos/:id/reparar-desde-workdrive", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const responsable = req.body.responsable || "Sistema";
+    
+    console.log(`🔧 [REPARAR-WD] Iniciando reparación desde WorkDrive para: ${id}`);
+    
+    // 1. Obtener datos del candidato
+    const docRef = firestore.collection("CVs_staging").doc(id);
+    const docSnap = await docRef.get();
+    
+    if (!docSnap.exists) {
+      return res.status(404).json({ error: "Candidato no encontrado" });
+    }
+    
+    const candidato = docSnap.data();
+    const email = candidato.email || "";
+    const nombre = candidato.nombre || "";
+    
+    console.log(`📋 [REPARAR-WD] Buscando CV para: ${nombre} (${email})`);
+    
+    // 2. Construir términos de búsqueda
+    // Intentamos varias estrategias para encontrar el archivo
+    const terminosBusqueda = [];
+    
+    // Por email (más preciso)
+    if (email) {
+      const emailSafe = email.replace(/[^a-zA-Z0-9]/g, '_');
+      terminosBusqueda.push(emailSafe);
+      terminosBusqueda.push(email.split('@')[0]); // Solo la parte antes del @
+    }
+    
+    // Por nombre
+    if (nombre) {
+      const nombreSafe = nombre.replace(/[^a-zA-Z0-9\s]/g, '').trim();
+      terminosBusqueda.push(nombreSafe);
+      // También el primer nombre solo
+      const primerNombre = nombreSafe.split(' ')[0];
+      if (primerNombre.length > 2) {
+        terminosBusqueda.push(primerNombre);
+      }
+    }
+    
+    // Por ID del documento
+    terminosBusqueda.push(id);
+    
+    // 3. Buscar en WorkDrive
+    let archivoEncontrado = null;
+    
+    for (const termino of terminosBusqueda) {
+      if (!termino) continue;
+      
+      console.log(`🔍 [REPARAR-WD] Buscando con término: "${termino}"`);
+      
+      try {
+        const resultados = await buscarArchivoEnWorkDrive(termino);
+        
+        // Filtrar solo PDFs
+        const pdfs = resultados.filter(f => 
+          f.attributes?.name?.toLowerCase().endsWith('.pdf') ||
+          f.attributes?.extension === 'pdf'
+        );
+        
+        if (pdfs.length > 0) {
+          // Tomar el más reciente o el que mejor coincida
+          archivoEncontrado = pdfs[0];
+          console.log(`✅ [REPARAR-WD] PDF encontrado: ${archivoEncontrado.attributes?.name}`);
+          break;
+        }
+      } catch (searchError) {
+        console.warn(`⚠️ [REPARAR-WD] Error buscando "${termino}":`, searchError.message);
+      }
+    }
+    
+    if (!archivoEncontrado) {
+      return res.status(404).json({
+        ok: false,
+        error: "CV no encontrado en WorkDrive",
+        mensaje: "No se encontró ningún PDF que coincida con este candidato en el backup de WorkDrive.",
+        terminos_buscados: terminosBusqueda.filter(t => t)
+      });
+    }
+    
+    // 4. Descargar el archivo de WorkDrive
+    console.log(`📥 [REPARAR-WD] Descargando: ${archivoEncontrado.id}`);
+    const pdfBuffer = await descargarArchivoDeWorkDrive(archivoEncontrado.id);
+    
+    // 5. Subir a Firebase Storage
+    const fileName = `CVs_staging/files/${id}_CV.pdf`;
+    const bucketFile = bucket.file(fileName);
+    
+    await bucketFile.save(pdfBuffer, {
+      metadata: { contentType: 'application/pdf' }
+    });
+    
+    // Generar URL firmada
+    const [signedUrl] = await bucketFile.getSignedUrl({
+      action: 'read',
+      expires: '01-01-2035'
+    });
+    
+    console.log(`✅ [REPARAR-WD] PDF subido a Storage: ${fileName}`);
+    
+    // 6. Extraer texto del PDF
+    const pdfData = await pdfParse(pdfBuffer);
+    const textoCV = pdfData.text.slice(0, 20000);
+    
+    console.log(`📝 [REPARAR-WD] Texto extraído: ${textoCV.length} caracteres`);
+    
+    // 7. Generar reseña del CV con IA
+    const reseñaCV = await generarResenaCV(textoCV, candidato.puesto || "General");
+    console.log(`🤖 [REPARAR-WD] Reseña generada`);
+    
+    // 8. Calcular score
+    const respuestasFiltro = candidato.respuestas_filtro || {};
+    const datosFormulario = JSON.stringify(respuestasFiltro);
+    
+    const analisisIA = await verificaConocimientosMinimos(
+      candidato.puesto || "General",
+      datosFormulario,
+      "",
+      reseñaCV,
+      candidato.reseña_video || null
+    );
+    
+    // Aplicar límites según origen
+    const origen = candidato.origen || "";
+    const tieneVideo = !!candidato.reseña_video;
+    
+    if (origen.includes("zoho") || origen.includes("webhook")) {
+      analisisIA.score = Math.min(analisisIA.score, tieneVideo ? 80 : 75);
+    } else {
+      analisisIA.score = Math.min(analisisIA.score, tieneVideo ? 75 : 70);
+    }
+    
+    // 9. Actualizar Firestore
+    const updateData = {
+      cv_url: signedUrl,
+      tiene_pdf: true,
+      texto_extraido: textoCV,
+      reseña_cv: reseñaCV,
+      ia_score: analisisIA.score,
+      ia_motivos: analisisIA.motivos,
+      ia_alertas: analisisIA.alertas || [],
+      ia_status: "processed",
+      actualizado_en: admin.firestore.FieldValue.serverTimestamp(),
+      
+      // Registro de la reparación
+      reparacion_workdrive: {
+        fecha: new Date().toISOString(),
+        archivo_original: archivoEncontrado.attributes?.name || "desconocido",
+        archivo_id: archivoEncontrado.id,
+        responsable: responsable
+      },
+      
+      // Historial
+      historial_movimientos: admin.firestore.FieldValue.arrayUnion({
+        date: new Date().toISOString(),
+        event: 'CV Reparado desde WorkDrive',
+        detail: `CV recuperado del backup (${archivoEncontrado.attributes?.name}). Nuevo score: ${analisisIA.score}`,
+        usuario: responsable
+      })
+    };
+    
+    await docRef.update(updateData);
+    
+    console.log(`✅ [REPARAR-WD] Reparación completada. Score: ${analisisIA.score}`);
+    
+    res.json({
+      ok: true,
+      mensaje: "CV recuperado y reprocesado exitosamente desde WorkDrive",
+      datos: {
+        archivo_encontrado: archivoEncontrado.attributes?.name,
+        cv_url: signedUrl,
+        tiene_pdf: true,
+        score_anterior: candidato.ia_score || 0,
+        score_nuevo: analisisIA.score,
+        motivos: analisisIA.motivos,
+        alertas: analisisIA.alertas || []
+      }
+    });
+    
+  } catch (error) {
+    console.error("❌ [REPARAR-WD] Error:", error);
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// ==========================================================================
+// 🎥 ENDPOINT: REPARAR VIDEO DESDE WORKDRIVE
+// ==========================================================================
+app.post("/candidatos/:id/reparar-video-workdrive", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const responsable = req.body.responsable || "Sistema";
+    
+    console.log(`🎥 [REPARAR-VIDEO-WD] Iniciando para: ${id}`);
+    
+    // 1. Obtener datos del candidato
+    const docRef = firestore.collection("CVs_staging").doc(id);
+    const docSnap = await docRef.get();
+    
+    if (!docSnap.exists) {
+      return res.status(404).json({ error: "Candidato no encontrado" });
+    }
+    
+    const candidato = docSnap.data();
+    const email = candidato.email || "";
+    
+    console.log(`📋 [REPARAR-VIDEO-WD] Buscando video para: ${candidato.nombre} (${email})`);
+    
+    // 2. Buscar video en WorkDrive
+    const videos = await buscarVideoEnWorkDrive(email);
+    
+    if (!videos || videos.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Video no encontrado en WorkDrive",
+        mensaje: "No se encontró ningún video en la carpeta del candidato."
+      });
+    }
+    
+    // Tomar el primer video encontrado
+    const videoEncontrado = videos[0];
+    const nombreArchivo = videoEncontrado.attributes?.name || 'video.mp4';
+    console.log(`✅ [REPARAR-VIDEO-WD] Video encontrado: ${nombreArchivo}`);
+    
+    // 3. Descargar el video de WorkDrive
+    console.log(`📥 [REPARAR-VIDEO-WD] Descargando video...`);
+    const videoBuffer = await descargarArchivoDeWorkDrive(videoEncontrado.id);
+    const sizeMB = videoBuffer.length / (1024 * 1024);
+    console.log(`📊 [REPARAR-VIDEO-WD] Tamaño: ${sizeMB.toFixed(2)} MB`);
+    
+    // 4. Comprimir si es mayor a 50MB
+    let bufferFinal = videoBuffer;
+    const extension = nombreArchivo.split('.').pop() || 'mp4';
+    
+    if (sizeMB > 50) {
+      console.log(`🎬 [REPARAR-VIDEO-WD] Comprimiendo video (${sizeMB.toFixed(2)} MB > 50 MB)...`);
+      
+      const tempInputPath = path.join(os.tmpdir(), `${id}_video_original_${Date.now()}.${extension}`);
+      const tempOutputPath = path.join(os.tmpdir(), `${id}_video_comprimido_${Date.now()}.mp4`);
+      
+      // Guardar temporalmente
+      fs.writeFileSync(tempInputPath, videoBuffer);
+      
+      // Comprimir
+      await comprimirVideoA50MB(tempInputPath, tempOutputPath);
+      
+      // Leer el comprimido
+      bufferFinal = fs.readFileSync(tempOutputPath);
+      
+      // Limpiar archivos temporales
+      try { fs.unlinkSync(tempInputPath); } catch(e) {}
+      try { fs.unlinkSync(tempOutputPath); } catch(e) {}
+      
+      const newSizeMB = bufferFinal.length / (1024 * 1024);
+      console.log(`✅ [REPARAR-VIDEO-WD] Video comprimido: ${sizeMB.toFixed(2)} MB → ${newSizeMB.toFixed(2)} MB`);
+    }
+    
+    // 5. Subir a Firebase Storage
+    const fileName = `CVs_staging/videos/${id}_video.mp4`;
+    const bucketFile = bucket.file(fileName);
+    
+    await bucketFile.save(bufferFinal, {
+      metadata: { contentType: 'video/mp4' }
+    });
+    
+    // Generar URL firmada
+    const [signedUrl] = await bucketFile.getSignedUrl({
+      action: 'read',
+      expires: '01-01-2035'
+    });
+    
+    console.log(`✅ [REPARAR-VIDEO-WD] Video subido a Storage: ${fileName}`);
+    
+    // 6. Analizar video con IA (usando la función existente)
+    console.log(`🤖 [REPARAR-VIDEO-WD] Analizando video con IA...`);
+    
+    const resultadoVideo = await generarResenaVideo(signedUrl, candidato.puesto || "General");
+    
+    let reseñaVideo = null;
+    let videoError = null;
+    
+    if (resultadoVideo.reseña) {
+      reseñaVideo = resultadoVideo.reseña;
+      console.log(`✅ [REPARAR-VIDEO-WD] Reseña generada correctamente`);
+    } else {
+      videoError = resultadoVideo.error;
+      console.log(`⚠️ [REPARAR-VIDEO-WD] Error generando reseña: ${videoError}`);
+    }
+    
+    // 7. Recalcular score si hay reseña del video
+    let nuevoScore = candidato.ia_score || 0;
+    let nuevoMotivos = candidato.ia_motivos || "";
+    let nuevasAlertas = candidato.ia_alertas || [];
+    
+    if (reseñaVideo) {
+      console.log(`🤖 [REPARAR-VIDEO-WD] Recalculando score con video...`);
+      
+      const reseñaCV = candidato.reseña_cv || null;
+      const respuestasFiltro = candidato.respuestas_filtro || {};
+      const datosFormulario = JSON.stringify(respuestasFiltro);
+      
+      try {
+        const analisisIA = await verificaConocimientosMinimos(
+          candidato.puesto || "General",
+          datosFormulario,
+          "",
+          reseñaCV,
+          reseñaVideo
+        );
+        
+        // Aplicar límite según origen
+        const origen = candidato.origen || "";
+        if (origen === "webhook_zoho_passive" || origen.includes("zoho") || origen.includes("mail")) {
+          analisisIA.score = Math.min(analisisIA.score, 80);
+        } else if (origen === "carga_manual") {
+          analisisIA.score = Math.min(analisisIA.score, 75);
+        }
+        
+        nuevoScore = analisisIA.score;
+        nuevoMotivos = analisisIA.motivos;
+        nuevasAlertas = analisisIA.alertas || [];
+        
+        console.log(`✅ [REPARAR-VIDEO-WD] Score recalculado: ${candidato.ia_score || 0} → ${nuevoScore}`);
+        
+      } catch (e) {
+        console.error(`❌ [REPARAR-VIDEO-WD] Error recalculando score:`, e.message);
+      }
+    }
+    
+    // 8. Actualizar Firestore
+    const updateData = {
+      video_url: signedUrl,
+      video_tipo: 'archivo',
+      reseña_video: reseñaVideo,
+      video_error: videoError,
+      ia_score: nuevoScore,
+      ia_motivos: nuevoMotivos,
+      ia_alertas: nuevasAlertas,
+      actualizado_en: admin.firestore.FieldValue.serverTimestamp(),
+      
+      // Registro de la reparación
+      reparacion_video_workdrive: {
+        fecha: new Date().toISOString(),
+        archivo_original: nombreArchivo,
+        archivo_id: videoEncontrado.id,
+        responsable: responsable,
+        comprimido: sizeMB > 50
+      },
+      
+      // Historial
+      historial_movimientos: admin.firestore.FieldValue.arrayUnion({
+        date: new Date().toISOString(),
+        event: 'Video Recuperado desde WorkDrive',
+        detail: `Video recuperado (${nombreArchivo}), analizado con IA. Score: ${candidato.ia_score || 0} → ${nuevoScore}`,
+        usuario: responsable
+      })
+    };
+    
+    await docRef.update(updateData);
+    
+    console.log(`✅ [REPARAR-VIDEO-WD] Reparación completada`);
+    
+    res.json({
+      ok: true,
+      mensaje: "Video recuperado, analizado y score recalculado exitosamente",
+      datos: {
+        archivo_encontrado: nombreArchivo,
+        video_url: signedUrl,
+        comprimido: sizeMB > 50,
+        tamaño_original_mb: sizeMB.toFixed(2),
+        score_anterior: candidato.ia_score || 0,
+        score_nuevo: nuevoScore,
+        tiene_reseña: !!reseñaVideo
+      }
+    });
+    
+  } catch (error) {
+    console.error("❌ [REPARAR-VIDEO-WD] Error:", error);
     res.status(500).json({
       ok: false,
       error: error.message
