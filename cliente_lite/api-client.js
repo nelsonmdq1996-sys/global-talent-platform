@@ -220,6 +220,23 @@ const api = {
                         return { ok: false, error: e.message };
                     }
                 },
+                repararVideoDesdeWorkDrive: async (id) => {
+                    try {
+                        const headers = await getHeaders({ 'Content-Type': 'application/json' });
+                        const res = await fetch(`${API_URL}/candidatos/${id}/reparar-video-workdrive`, {
+                            method: 'POST',
+                            headers: headers
+                        });
+                        const data = await res.json();
+                        if (!res.ok) {
+                            throw new Error(data.error || 'Error al reparar video desde WorkDrive');
+                        }
+                        return data;
+                    } catch (e) {
+                        console.error("Error reparando video desde WorkDrive:", e);
+                        return { ok: false, error: e.message };
+                    }
+                },
                 analizar: async (id, responsable) => {
                     try {
                         const headers = await getHeaders({ 'Content-Type': 'application/json' });

@@ -22,7 +22,9 @@ const { google } = require("googleapis");
 const nodemailer = require("nodemailer");
 require("dotenv").config();
 const fichaGenerator = require("./services/fichaGenerator");
-const {buscarArchivoEnWorkDrive, 
+const { 
+  buscarArchivoEnWorkDrive, 
+  buscarVideoEnWorkDrive,
   descargarArchivoDeWorkDrive 
 } = require('./zohoWorkDrive');
 
@@ -4375,6 +4377,207 @@ app.post("/candidatos/:id/reparar-desde-workdrive", async (req, res) => {
     });
   }
 });
+
+// ==========================================================================
+// 🎥 ENDPOINT: REPARAR VIDEO DESDE WORKDRIVE
+// ==========================================================================
+app.post("/candidatos/:id/reparar-video-workdrive", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const responsable = req.body.responsable || "Sistema";
+    
+    console.log(`🎥 [REPARAR-VIDEO-WD] Iniciando para: ${id}`);
+    
+    // 1. Obtener datos del candidato
+    const docRef = firestore.collection("CVs_staging").doc(id);
+    const docSnap = await docRef.get();
+    
+    if (!docSnap.exists) {
+      return res.status(404).json({ error: "Candidato no encontrado" });
+    }
+    
+    const candidato = docSnap.data();
+    const email = candidato.email || "";
+    
+    console.log(`📋 [REPARAR-VIDEO-WD] Buscando video para: ${candidato.nombre} (${email})`);
+    
+    // 2. Buscar video en WorkDrive
+    const videos = await buscarVideoEnWorkDrive(email);
+    
+    if (!videos || videos.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "Video no encontrado en WorkDrive",
+        mensaje: "No se encontró ningún video en la carpeta del candidato."
+      });
+    }
+    
+    // Tomar el primer video encontrado
+    const videoEncontrado = videos[0];
+    const nombreArchivo = videoEncontrado.attributes?.name || 'video.mp4';
+    console.log(`✅ [REPARAR-VIDEO-WD] Video encontrado: ${nombreArchivo}`);
+    
+    // 3. Descargar el video de WorkDrive
+    console.log(`📥 [REPARAR-VIDEO-WD] Descargando video...`);
+    const videoBuffer = await descargarArchivoDeWorkDrive(videoEncontrado.id);
+    const sizeMB = videoBuffer.length / (1024 * 1024);
+    console.log(`📊 [REPARAR-VIDEO-WD] Tamaño: ${sizeMB.toFixed(2)} MB`);
+    
+    // 4. Comprimir si es mayor a 50MB
+    let bufferFinal = videoBuffer;
+    const extension = nombreArchivo.split('.').pop() || 'mp4';
+    
+    if (sizeMB > 50) {
+      console.log(`🎬 [REPARAR-VIDEO-WD] Comprimiendo video (${sizeMB.toFixed(2)} MB > 50 MB)...`);
+      
+      const tempInputPath = path.join(os.tmpdir(), `${id}_video_original_${Date.now()}.${extension}`);
+      const tempOutputPath = path.join(os.tmpdir(), `${id}_video_comprimido_${Date.now()}.mp4`);
+      
+      // Guardar temporalmente
+      fs.writeFileSync(tempInputPath, videoBuffer);
+      
+      // Comprimir
+      await comprimirVideoA50MB(tempInputPath, tempOutputPath);
+      
+      // Leer el comprimido
+      bufferFinal = fs.readFileSync(tempOutputPath);
+      
+      // Limpiar archivos temporales
+      try { fs.unlinkSync(tempInputPath); } catch(e) {}
+      try { fs.unlinkSync(tempOutputPath); } catch(e) {}
+      
+      const newSizeMB = bufferFinal.length / (1024 * 1024);
+      console.log(`✅ [REPARAR-VIDEO-WD] Video comprimido: ${sizeMB.toFixed(2)} MB → ${newSizeMB.toFixed(2)} MB`);
+    }
+    
+    // 5. Subir a Firebase Storage
+    const fileName = `CVs_staging/videos/${id}_video.mp4`;
+    const bucketFile = bucket.file(fileName);
+    
+    await bucketFile.save(bufferFinal, {
+      metadata: { contentType: 'video/mp4' }
+    });
+    
+    // Generar URL firmada
+    const [signedUrl] = await bucketFile.getSignedUrl({
+      action: 'read',
+      expires: '01-01-2035'
+    });
+    
+    console.log(`✅ [REPARAR-VIDEO-WD] Video subido a Storage: ${fileName}`);
+    
+    // 6. Analizar video con IA (usando la función existente)
+    console.log(`🤖 [REPARAR-VIDEO-WD] Analizando video con IA...`);
+    
+    const resultadoVideo = await generarResenaVideo(signedUrl, candidato.puesto || "General");
+    
+    let reseñaVideo = null;
+    let videoError = null;
+    
+    if (resultadoVideo.reseña) {
+      reseñaVideo = resultadoVideo.reseña;
+      console.log(`✅ [REPARAR-VIDEO-WD] Reseña generada correctamente`);
+    } else {
+      videoError = resultadoVideo.error;
+      console.log(`⚠️ [REPARAR-VIDEO-WD] Error generando reseña: ${videoError}`);
+    }
+    
+    // 7. Recalcular score si hay reseña del video
+    let nuevoScore = candidato.ia_score || 0;
+    let nuevoMotivos = candidato.ia_motivos || "";
+    let nuevasAlertas = candidato.ia_alertas || [];
+    
+    if (reseñaVideo) {
+      console.log(`🤖 [REPARAR-VIDEO-WD] Recalculando score con video...`);
+      
+      const reseñaCV = candidato.reseña_cv || null;
+      const respuestasFiltro = candidato.respuestas_filtro || {};
+      const datosFormulario = JSON.stringify(respuestasFiltro);
+      
+      try {
+        const analisisIA = await verificaConocimientosMinimos(
+          candidato.puesto || "General",
+          datosFormulario,
+          "",
+          reseñaCV,
+          reseñaVideo
+        );
+        
+        // Aplicar límite según origen
+        const origen = candidato.origen || "";
+        if (origen === "webhook_zoho_passive" || origen.includes("zoho") || origen.includes("mail")) {
+          analisisIA.score = Math.min(analisisIA.score, 80);
+        } else if (origen === "carga_manual") {
+          analisisIA.score = Math.min(analisisIA.score, 75);
+        }
+        
+        nuevoScore = analisisIA.score;
+        nuevoMotivos = analisisIA.motivos;
+        nuevasAlertas = analisisIA.alertas || [];
+        
+        console.log(`✅ [REPARAR-VIDEO-WD] Score recalculado: ${candidato.ia_score || 0} → ${nuevoScore}`);
+        
+      } catch (e) {
+        console.error(`❌ [REPARAR-VIDEO-WD] Error recalculando score:`, e.message);
+      }
+    }
+    
+    // 8. Actualizar Firestore
+    const updateData = {
+      video_url: signedUrl,
+      video_tipo: 'archivo',
+      reseña_video: reseñaVideo,
+      video_error: videoError,
+      ia_score: nuevoScore,
+      ia_motivos: nuevoMotivos,
+      ia_alertas: nuevasAlertas,
+      actualizado_en: admin.firestore.FieldValue.serverTimestamp(),
+      
+      // Registro de la reparación
+      reparacion_video_workdrive: {
+        fecha: new Date().toISOString(),
+        archivo_original: nombreArchivo,
+        archivo_id: videoEncontrado.id,
+        responsable: responsable,
+        comprimido: sizeMB > 50
+      },
+      
+      // Historial
+      historial_movimientos: admin.firestore.FieldValue.arrayUnion({
+        date: new Date().toISOString(),
+        event: 'Video Recuperado desde WorkDrive',
+        detail: `Video recuperado (${nombreArchivo}), analizado con IA. Score: ${candidato.ia_score || 0} → ${nuevoScore}`,
+        usuario: responsable
+      })
+    };
+    
+    await docRef.update(updateData);
+    
+    console.log(`✅ [REPARAR-VIDEO-WD] Reparación completada`);
+    
+    res.json({
+      ok: true,
+      mensaje: "Video recuperado, analizado y score recalculado exitosamente",
+      datos: {
+        archivo_encontrado: nombreArchivo,
+        video_url: signedUrl,
+        comprimido: sizeMB > 50,
+        tamaño_original_mb: sizeMB.toFixed(2),
+        score_anterior: candidato.ia_score || 0,
+        score_nuevo: nuevoScore,
+        tiene_reseña: !!reseñaVideo
+      }
+    });
+    
+  } catch (error) {
+    console.error("❌ [REPARAR-VIDEO-WD] Error:", error);
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
 // ==========================================
 // 📦 2. FRONTEND (Sirve la página web)
 // ==========================================

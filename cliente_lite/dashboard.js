@@ -3739,6 +3739,7 @@ const handleConfirmDisqualified = () => {
                                                         Storage
                                                     </button>
                                                 )}
+
                                                 {/* Reparar desde WorkDrive */}
                                                 {(!candidate.tiene_pdf || (!candidate.texto_extraido && candidate.ia_score === 0)) && (
                                                     <button
@@ -3787,15 +3788,50 @@ const handleConfirmDisqualified = () => {
                                                 </span>
                                             )}
                                         </h4>
-                                        <p className="text-xs text-purple-400 group-hover:underline">
-                                            {isAnalyzingVideo ? 'Procesando video con IA...' :
-                                             !candidate.video_url ? 'No disponible' : 
-                                             candidate.video_url.startsWith('http') ? (
-                                                 <a href={candidate.video_url} target="_blank" className="hover:underline">Abrir Link Externo</a>
-                                             ) : 
-                                             candidate.video_tipo === 'archivo' ? 'Video subido (ver en Zoho)' : 
-                                             'Link no válido'}
-                                        </p>
+                                        {/* Link al video o mensaje de no disponible */}
+                                        {candidate.video_url && candidate.video_url.startsWith('http') ? (
+                                            <a href={candidate.video_url} target="_blank" className="text-xs text-purple-400 hover:underline">
+                                                Abrir Link Externo
+                                            </a>
+                                        ) : (
+                                            <p className="text-xs text-slate-500">
+                                                {candidate.video_tipo === 'archivo' ? 'Video subido (ver en Zoho)' : 'No disponible'}
+                                            </p>
+                                        )}
+                                        
+                                        {/* 🎥 BOTÓN REPARAR VIDEO - Solo si no hay video válido */}
+                                        {(!candidate.video_url || !candidate.video_url.startsWith('http')) && (
+                                            <div className="flex items-center gap-2 mt-1">
+                                                <button
+                                                    onClick={async () => {
+                                                        if (isReparandoCV) return;
+                                                        setIsReparandoCV(true);
+                                                        try {
+                                                            const result = await api.candidates.repararVideoDesdeWorkDrive(candidate.id);
+                                                            if (result.ok) {
+                                                                alert(`✅ ${result.mensaje}\nArchivo: ${result.datos.archivo_encontrado}`);
+                                                                const data = await api.candidates.list();
+                                                                const lista = data.candidatos || data || [];
+                                                                const actualizado = lista.find(c => c.id === candidate.id);
+                                                                if (actualizado) onUpdate(candidate.id, actualizado);
+                                                            } else {
+                                                                alert(`❌ ${result.error || result.mensaje}`);
+                                                            }
+                                                        } catch (error) {
+                                                            alert("❌ Error al recuperar video de WorkDrive");
+                                                        } finally {
+                                                            setIsReparandoCV(false);
+                                                        }
+                                                    }}
+                                                    disabled={isReparandoCV}
+                                                    className="text-[10px] text-purple-400 hover:text-purple-300 flex items-center gap-1 disabled:opacity-50"
+                                                    title="Buscar video en WorkDrive (backup)"
+                                                >
+                                                    {isReparandoCV ? <Loader2 size={10} className="animate-spin"/> : <CloudDownload size={10}/>}
+                                                    WorkDrive
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>

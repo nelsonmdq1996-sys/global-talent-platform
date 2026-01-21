@@ -213,12 +213,45 @@ async function descargarArchivoDeWorkDrive(fileId) {
     throw new Error(`Error descargando de WorkDrive: ${error.message}`);
   }
 }
+/**
+ * Busca un archivo de video en la carpeta de un candidato
+ * @param {string} email - Email del candidato
+ * @returns {Object|null} - Archivo de video encontrado o null
+ */
+async function buscarVideoEnWorkDrive(email) {
+    try {
+      // 1. Buscar la carpeta del candidato
+      const carpeta = await buscarCarpetaCandidato(email);
+      
+      if (!carpeta) {
+        return [];
+      }
+      
+      // 2. Listar archivos en la carpeta
+      const archivos = await listarArchivosEnCarpeta(carpeta.id);
+      
+      // 3. Filtrar solo videos
+      const videos = archivos.filter(archivo => {
+        const nombre = (archivo.attributes?.name || '').toLowerCase();
+        return nombre.endsWith('.mp4') || nombre.endsWith('.mov') || 
+               nombre.endsWith('.avi') || nombre.endsWith('.webm');
+      });
+      
+      console.log(`🎥 [WorkDrive] Videos encontrados: ${videos.length}`);
+      return videos;
+      
+    } catch (error) {
+      console.error('❌ [WorkDrive] Error buscando video:', error.message);
+      throw error;
+    }
+  }
 
 module.exports = {
-  getZohoAccessToken,
-  buscarArchivoEnWorkDrive,
-  descargarArchivoDeWorkDrive,
-  listarSubcarpetas,
-  listarArchivosEnCarpeta,
-  buscarCarpetaCandidato
+    getZohoAccessToken,
+    buscarArchivoEnWorkDrive,
+    buscarVideoEnWorkDrive,
+    descargarArchivoDeWorkDrive,
+    listarSubcarpetas,
+    listarArchivosEnCarpeta,
+    buscarCarpetaCandidato
 };
