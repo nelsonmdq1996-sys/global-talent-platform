@@ -455,11 +455,52 @@
         );
         }
 
+        // --- LISTA COMPARTIDA DE PUESTOS DISPONIBLES ---
+        const PUESTOS_DISPONIBLES = [
+            "Asistente Administrativo Inteligente",
+            "Asistente de Arquitectura",
+            "Asistente de Comunicación Corporativa",
+            "Asistente Financiero y Contable",
+            "Asistente de Marketing Digital",
+            "Asistente para E commerce",
+            "Asistente para Desarrollo Web",
+            "Asistente de Diseño Gráfico",
+            "Asistente de Automatización con IA",
+            "Asistente de Gestión y Calidad",
+            "Asistente de Recursos Humanos",
+            "Asistente de Gestión de Procesos",
+            "Asistente Diseñador/a de Productos e Interiores",
+            "Asistente Técnico/a de Proyectos Acústicos",
+            "Asistente de Atención al Cliente",
+            "Asistente de Ventas y Prospección",
+            "Asistente de Soporte Técnico/TI",
+            "Asistente Valoración Inmobiliaria y Tasación",
+            "Asistente Diseñador UX/UI",
+            "Asistente Desarrollador/a Senior - Magnolia CMS",
+            "Asistente Delineante técnico",
+            "Asistente Ingeniero/a de Caminos",
+            "Asistente de Gestión de Proyectos",
+            "Asistente Virtual Ejecutiva",
+            "Asistente Project Manager",
+            "Asistente de Marketing con Elementor",
+            "Asistente Especialista en Calidad con Power BI",
+            "Asistente Ingeniero Mecatronico/Automatización",
+            "Asistente en Estrategia y Operaciones",
+            "Asistente Financiero",
+            "Asistente Desarrollador/a de Automatizaciones Zoho",
+            "Asistente Aparejador / Arquitecto Técnico",
+            "Asistente Comercial - Remodelaciones, Reformas y Construcción",
+            "Asistente Desarrollador Odoo + Shopify",
+            "Asistente Programador web (Power BI + Integración ERP/CRM",
+            "Asistente de Seguridad y Salud Laboral"
+        ];
+
         // --- NUEVA VISTA: BUSQUEDA Y TRACKING ---
         function SearchView({ candidates, onSelect }) {
             const [searchTerm, setSearchTerm] = useState('');
             const [debouncedTerm, setDebouncedTerm] = useState('');  //agregado Debounce
             const [roleFilter, setRoleFilter] = useState('Todos');
+            const [isFilterOpen, setIsFilterOpen] = useState(false);
 
             useEffect(() => {
                 const timer = setTimeout(() => {
@@ -467,17 +508,31 @@
                 }, 300);
                 return () => clearTimeout(timer); // Limpia el timer si el usuario sigue escribiendo
             }, [searchTerm]);
+
+            // Cerrar dropdown al hacer clic fuera
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (isFilterOpen && !event.target.closest('.filter-dropdown-container')) {
+                        setIsFilterOpen(false);
+                    }
+                };
+                if (isFilterOpen) {
+                    document.addEventListener('mousedown', handleClickOutside);
+                    return () => document.removeEventListener('mousedown', handleClickOutside);
+                }
+            }, [isFilterOpen]);
         
             // 3. Ahora filtramos usando 'debouncedTerm' en lugar de 'searchTerm'
            
             const results = candidates.filter(c => {
                 const matchesText = c.nombre.toLowerCase().includes(debouncedTerm.toLowerCase()) || 
                                   c.email.toLowerCase().includes(debouncedTerm.toLowerCase());
-                const matchesRole = roleFilter === 'Todos' || c.puesto.includes(roleFilter);
+                const matchesRole = roleFilter === 'Todos' || c.puesto === roleFilter;
                 return matchesText && matchesRole;
             });
 
-            const roles = ['Todos', ...new Set(candidates.map(c => c.puesto))];
+            // Usar todos los puestos disponibles
+            const roles = ['Todos', ...PUESTOS_DISPONIBLES];
 
             return (
                 <div className="h-full flex flex-col max-w-7xl mx-auto">
@@ -486,24 +541,45 @@
                         <p className="text-slate-400 text-sm mt-1">Localiza candidatos y revisa su estado actual.</p>
                     </div>
 
-                    <div className="flex gap-4 mb-6">
+                    <div className="flex gap-4 mb-6 items-stretch">
                         <div className="relative flex-1">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16}/>
                             <input 
                                 type="text" 
                                 placeholder="Buscar por nombre o email..." 
-                                className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-white focus:border-blue-500 focus:outline-none"
+                                className="w-full h-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-white focus:border-blue-500 focus:outline-none"
                                 value={searchTerm}
                                 onChange={e => setSearchTerm(e.target.value)}
                             />
                         </div>
-                        <select 
-                            className="px-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-white text-sm focus:border-blue-500 focus:outline-none"
-                            value={roleFilter}
-                            onChange={e => setRoleFilter(e.target.value)}
-                        >
-                            {roles.map(r => <option key={r} value={r}>{r}</option>)}
-                        </select>
+                        <div className="relative filter-dropdown-container flex">
+                            <button
+                                onClick={() => setIsFilterOpen(!isFilterOpen)}
+                                className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-white text-sm hover:border-blue-500 focus:border-blue-500 focus:outline-none transition-colors h-full"
+                            >
+                                <Filter size={16} />
+                                <span className="min-w-[100px] text-left">{roleFilter}</span>
+                                <ChevronDown size={16} className={`transition-transform ${isFilterOpen ? 'rotate-180' : ''}`} />
+                            </button>
+                            {isFilterOpen && (
+                                <div className="absolute top-full mt-2 right-0 bg-slate-900 border border-slate-800 rounded-xl shadow-xl z-50 max-h-[300px] overflow-y-auto min-w-[250px]">
+                                    {roles.map(r => (
+                                        <button
+                                            key={r}
+                                            onClick={() => {
+                                                setRoleFilter(r);
+                                                setIsFilterOpen(false);
+                                            }}
+                                            className={`w-full text-left px-4 py-2.5 text-sm text-white hover:bg-slate-800 transition-colors ${
+                                                roleFilter === r ? 'bg-blue-500/20 text-blue-400' : ''
+                                            }`}
+                                        >
+                                            {r}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex-1">
@@ -615,46 +691,8 @@
     const [disponibilidad, setDisponibilidad] = React.useState('');
     const [herramientas, setHerramientas] = React.useState('');
     
-    // Lista de puestos disponibles
-    const puestosDisponibles = [
-        "Asistente Administrativo Inteligente",
-        "Asistente de Arquitectura",
-        "Asistente de Comunicacion Corporativa",
-        "Asistente Financiero y Contable",
-        "Asistente de Marketing Digital",
-        "Asistente para E commerce",
-        "Asistente para Desarrollo Web",
-        "Asistente de Diseño Grafico",
-        "Asistente de Automatizacion con IA",
-        "Asistente de Gestión y Calidad",
-        "Asistende de Recursos Humanos",
-        "Asistente de Gestión de Procesos",
-        "Asistente Diseñador/a de Productos e Interiores",
-        "Asistente Técnico/a de Proyectos Acústicos",
-        "Asistente de Atención al Cliente",
-        "Asistente de Ventas y Prospección",
-        "Asistente de Soporte Técnico/TI",
-        "Asistente Valoración Inmobiliaria y Tasación",
-        "Asistente Diseñador UX/UI",
-        "Aistente Desarrollador/a Senior - Magnolia CMS",
-        "Asistente Delineante técnico",
-        "Asistente Ingeniero/a de Caminos",
-        "Asistente de Gestión de Proyectos",
-        "Asistente Virtual Ejecutiva",
-        "Asistente Project Manager",
-        "Asistente de Marketing con Elementor",
-        "Asistente Especialista en Calidad con Power BI",
-        "Asistente Ingeniero Mecatrónico/Automatización",
-        "Asistente en Estrategia y Operaciones",
-        "Asistente Financiero",
-        "Asistente Desarrollador/a de Automatizaciones Zoho",
-        "Asistente Aparejador / Arquitecto Técnico",
-        "Asistente Comercial - Remodelariones, Reformas y Construcción",
-        "Asistente Desarrollador Odoo + Shopify",
-        "Asistente Programador web (Power BI + Integración ERP/CRM",
-        "Asistente de Seguridad y Salud Laboral",
-       
-    ];
+    // Usar la lista compartida de puestos disponibles
+    const puestosDisponibles = PUESTOS_DISPONIBLES;
     
     if (!isOpen) return null;
 
@@ -870,6 +908,8 @@
 function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
     const [filter, setFilter] = useState('');
     const [debouncedFilter, setDebouncedFilter] = useState('');
+    const [roleFilter, setRoleFilter] = useState('Todos');
+    const [isFilterOpen, setIsFilterOpen] = useState(false);
     const [allCandidates, setAllCandidates] = useState(candidates);
     const [originalCandidates, setOriginalCandidates] = useState(candidates); // Guardar candidatos originales
     const [hasMore, setHasMore] = useState(false);
@@ -914,6 +954,19 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
         }, 300);
         return () => clearTimeout(timer);
     }, [filter]);
+
+    // Cerrar dropdown al hacer clic fuera
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (isFilterOpen && !event.target.closest('.filter-dropdown-container')) {
+                setIsFilterOpen(false);
+            }
+        };
+        if (isFilterOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => document.removeEventListener('mousedown', handleClickOutside);
+        }
+    }, [isFilterOpen]);
 
     // Función para cargar más candidatos
     const cargarMas = async () => {
@@ -1030,6 +1083,11 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
     const filtered = sortedCandidates.filter(c => {
         if (c.stage !== 'stage_1') return false;
         
+        // Filtro por puesto
+        const matchesRole = roleFilter === 'Todos' || c.puesto === roleFilter;
+        if (!matchesRole) return false;
+        
+        // Filtro de búsqueda de texto
         if (!debouncedFilter.trim()) return true; // Si no hay filtro, mostrar todos
         
         const termino = debouncedFilter.toLowerCase().trim();
@@ -1039,6 +1097,9 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
         
         return nombreMatch || emailMatch || puestoMatch;
     });
+
+    // Usar todos los puestos disponibles
+    const roles = ['Todos', ...PUESTOS_DISPONIBLES];
 
     
 
@@ -1056,7 +1117,7 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
                     <p className="text-slate-400 text-sm mt-2">Revisa los perfiles ingresados recientemente.</p>
                 </div>
                 
-                <div className="flex gap-3 w-full md:w-auto items-center">
+                <div className="flex gap-3 w-full md:w-auto items-stretch">
                     <div className="relative group flex-1 md:w-64">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16}/>
                         <input 
@@ -1064,8 +1125,36 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
                             placeholder="Buscar..." 
                             value={filter} 
                             onChange={(e) => setFilter(e.target.value)} 
-                            className="w-full pl-10 pr-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-slate-300 focus:border-blue-500 focus:outline-none transition-all placeholder-slate-600"
+                            className="w-full h-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-300 focus:border-blue-500 focus:outline-none transition-all placeholder-slate-600"
                         />
+                    </div>
+                    <div className="relative filter-dropdown-container flex">
+                        <button
+                            onClick={() => setIsFilterOpen(!isFilterOpen)}
+                            className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-white text-sm hover:border-blue-500 focus:border-blue-500 focus:outline-none transition-colors h-full"
+                        >
+                            <Filter size={16} />
+                            <span className="min-w-[100px] text-left text-xs">{roleFilter}</span>
+                            <ChevronDown size={16} className={`transition-transform ${isFilterOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                        {isFilterOpen && (
+                            <div className="absolute top-full mt-2 right-0 bg-slate-900 border border-slate-800 rounded-xl shadow-xl z-50 max-h-[300px] overflow-y-auto min-w-[250px]">
+                                {roles.map(r => (
+                                    <button
+                                        key={r}
+                                        onClick={() => {
+                                            setRoleFilter(r);
+                                            setIsFilterOpen(false);
+                                        }}
+                                        className={`w-full text-left px-4 py-2.5 text-sm text-white hover:bg-slate-800 transition-colors ${
+                                            roleFilter === r ? 'bg-blue-500/20 text-blue-400' : ''
+                                        }`}
+                                    >
+                                        {r}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     </div>
                     {/* BOTÓN ESTILIZADO CON ICONO */}
                     <button 

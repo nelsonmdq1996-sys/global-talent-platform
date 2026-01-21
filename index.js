@@ -5319,28 +5319,105 @@ app.post("/candidatos/:id/analizar-entrevista", async (req, res) => {
 
     // 2. Prompt de Ingeniería: Fusión de Contextos
     const prompt = `
-      ACTÚA COMO: Reclutador Senior de Global Talent Connections.
-      OBJETIVO: Recalcular el puntaje del candidato cruzando su CV original con la ENTREVISTA recién realizada.
-
-      --- CONTEXTO HISTÓRICO ---
-      PERFIL ORIGINAL (CV): "${data.puesto || 'General'}"
-      ANÁLISIS PREVIO: "${data.ia_motivos || 'Sin análisis previo'}"
-      SCORE ANTERIOR: ${data.ia_score || 0}
-      
-      --- NUEVA EVIDENCIA (ENTREVISTA REAL) ---
-      "${transcript.slice(0, 15000)}"
-
-      --- TAREA DE FUSIÓN ---
-      1. VALIDACIÓN: ¿La entrevista confirma lo que decía el CV o detectas inconsistencias/mentiras?
-      2. CORRECCIÓN: Si el candidato demostró ser mejor en vivo, SUBE el score. Si fue vago o mentiroso, BÁJALO.
-      3. FLAGS: Genera nuevas alertas si detectas riesgos (ej: "Inglés peor de lo esperado", "Dudas sobre disponibilidad").
-
-      SALIDA JSON ÚNICAMENTE:
-      {
-        "score": (0-100),
-        "motivos": "Nuevo resumen integrando la entrevista. Ej: 'Mantiene un perfil sólido en React, pero se detectó nivel de inglés inferior al B2 declarado en CV...'",
-        "alertas": ["Alerta 1", "Alerta 2"]
-      }
+    ACTÚA COMO: Reclutador Senior de Global Talent Connections.
+    OBJETIVO: Recalcular el puntaje del candidato cruzando toda la información previa (CV + Video + Formulario) con la ENTREVISTA recién realizada.
+    
+    --- CONTEXTO HISTÓRICO (FUENTES DE VERDAD PREVIAS) ---
+    
+    PERFIL SOLICITADO: "${data.puesto || 'General'}"
+    
+    ANÁLISIS DEL CV:
+    "${data.reseña_cv || 'Sin análisis de CV disponible'}"
+    
+    ANÁLISIS DEL VIDEO DE PRESENTACIÓN:
+    "${data.reseña_video || 'Sin análisis de video disponible'}"
+    
+    SCORE INICIAL (basado en CV y formulario): ${data.ia_score || 0}
+    MOTIVOS DEL SCORE INICIAL: "${data.ia_motivos || 'Sin análisis previo'}"
+    
+    DATOS DECLARADOS EN FORMULARIO:
+    - Salario aceptado: ${data.respuestasfiltro?.salario || 'No especificado'}
+    - Acepta monitoreo: ${data.respuestasfiltro?.monitoreo || 'No especificado'}
+    - Disponibilidad: ${data.respuestasfiltro?.disponibilidad || 'No especificado'}
+    - Herramientas clave: ${data.respuestasfiltro?.herramientas || 'No especificado'}
+    
+    --- NUEVA EVIDENCIA (ENTREVISTA EN VIVO) ---
+    TRANSCRIPCIÓN:
+    "${transcript.slice(0, 15000)}"
+    
+    --- TAREA DE CONTRASTACIÓN ---
+    
+    1. 📋 VALIDACIÓN DE EXPERIENCIA:
+       - ¿El candidato puede PROFUNDIZAR en la experiencia declarada en el CV con ejemplos concretos, o sus respuestas son vagas?
+       - ¿Los logros/herramientas mencionados en CV se sostienen cuando se le pregunta por detalles específicos?
+       - ¿Demuestra conocimiento real de las herramientas del puesto, o solo las "conoce de nombre"?
+    
+    2. 🔄 CONSISTENCIA ENTRE FUENTES:
+       - ¿Hay CONTRADICCIONES entre CV, video, formulario y lo dicho en entrevista? (ej: años de experiencia, nivel de inglés, disponibilidad)
+       - ¿El nivel de comunicación del video se mantiene en la entrevista, o era un video sobre-ensayado?
+       - ¿Cambió de posición sobre condiciones laborales (salario, monitoreo, horarios) vs lo declarado en el formulario?
+    
+    3. 🎯 AJUSTE DE SCORE:
+       - SUBE (+10 a +20): Si demuestra MÁS conocimiento/experiencia de lo que el CV sugería, con ejemplos sólidos y actitud proactiva.
+       - MANTIENE (±5): Si confirma el nivel del CV sin sorpresas, positivas o negativas.
+       - BAJA (-10 a -30): Si respuestas vagas/inconsistencias revelan que el CV estaba inflado, o detectas banderas rojas nuevas (actitud, nivel técnico inferior, cambios de posición).
+    
+    4. 🚩 DETECCIÓN DE BANDERAS ROJAS:
+       - Genera ALERTAS específicas si detectas: nivel de inglés inferior al declarado, inconsistencias sobre experiencia, cambios en disponibilidad/salario, respuestas evasivas sobre logros, actitud problemática, señales de doble empleo no declarado.
+    
+    --- CALIBRACIÓN DE TONO (usa estos ejemplos como guía) ---
+    
+    VALIDACIÓN POSITIVA (Score sube):
+    - El candidato profundiza con ejemplos concretos que el CV no reflejaba bien
+    - Demuestra dominio técnico real de herramientas clave del puesto
+    - Actitud profesional y preparación evidente
+    → Tono: "La entrevista valida y amplía el perfil. Demuestra [skill específico] con ejemplos detallados de [contexto]. Se eleva el score debido a profundidad técnica superior a lo reflejado en CV."
+    
+    CONFIRMACIÓN (Score mantiene):
+    - La entrevista confirma lo analizado en CV y video
+    - Sin inconsistencias relevantes ni sorpresas
+    - Nivel técnico/actitudinal esperado
+    → Tono: "La entrevista es consistente con el análisis previo. Sostiene el nivel declarado en [áreas clave]. Se mantiene el score."
+    
+    DETECCIÓN DE INFLADO (Score baja):
+    - Respuestas vagas que no sostienen la experiencia del CV
+    - Inconsistencias entre fuentes (CV vs entrevista)
+    - Nivel técnico/inglés inferior al declarado
+    - Banderas rojas nuevas detectadas
+    → Tono: "La entrevista expone discrepancias con el CV. No pudo dar ejemplos concretos sobre [tema declarado]. [Mencionar inconsistencias específicas]. Se reduce el score."
+    
+    --- EJEMPLOS DE OUTPUT POR ÁREA (PATRONES DE REFERENCIA) ---
+    
+    [ÁREA TÉCNICA - Automatización/Desarrollo]
+    {
+      "score": 75,
+      "motivos": "La entrevista supera las expectativas del CV. Aunque el CV presentaba descripciones básicas, demostró dominio avanzado de las herramientas clave del puesto (Make, Zapier) con ejemplos detallados de workflows implementados. Validó métricas del logro declarado (reducción 40% en tiempos) con contexto técnico sólido. El análisis previo del video sobre actitud profesional se confirma con preparación evidente. Score elevado +15 puntos por profundidad técnica demostrada.",
+      "alertas": []
+    }
+    
+    [ÁREA COMUNICACIÓN/GESTIÓN - RRHH/Marketing]
+    {
+      "score": 58,
+      "motivos": "La entrevista confirma el perfil medio-bajo detectado en CV. Sostiene experiencia en procesos de reclutamiento con ejemplos coherentes pero sin métricas específicas de impacto. Las herramientas mencionadas (ATS básico, LinkedIn Recruiter) se validan con uso intermedio, no avanzado. Mantiene la estabilidad actitudinal del video. No hay inconsistencias graves entre fuentes. Score se mantiene como reflejo de un perfil que cumple mínimos sin destacarse.",
+      "alertas": ["Experiencia limitada en estrategias de employer branding"]
+    }
+    
+    [ÁREA ANALÍTICA - Contabilidad/Datos]
+    {
+      "score": 42,
+      "motivos": "La entrevista revela brechas significativas con el CV. Aunque declara experiencia con software contable avanzado (QuickBooks, SAP), no pudo explicar procesos de conciliación bancaria ni elaboración de estados financieros cuando se le solicitó detalle. Las respuestas sobre manejo de cierres contables fueron genéricas sin demostrar conocimiento práctico. Se detecta inconsistencia en nivel de Excel (CV: avanzado, entrevista: intermedio básico). Score reducido -18 puntos por falta de profundidad técnica comprobable.",
+      "alertas": ["Conocimiento superficial de software contable declarado", "Nivel de Excel inferior al declarado"]
+    }
+    
+    --- SALIDA JSON ÚNICAMENTE ---
+    
+    Devuelve SOLO este JSON sin texto adicional:
+    
+    {
+      "score": (0-100, ajustado según entrevista),
+      "motivos": "Párrafo de 4-6 líneas que CONTRASTA las fuentes previas (CV + Video + Formulario) con la entrevista. Menciona: 1) Qué se validó, 2) Qué inconsistencias se detectaron, 3) Por qué el score cambió o se mantuvo, 4) Puntos específicos de la entrevista que fundamentan la decisión. Tono profesional y objetivo.",
+      "alertas": ["Array de strings con banderas rojas específicas. Ejemplos: 'Nivel de inglés B1, no B2 declarado', 'No pudo profundizar en herramienta X del CV', 'Cambió posición sobre disponibilidad', 'Respuestas evasivas sobre logros específicos'"]
+    }
     `;
 
     // 3. Ejecución IA
