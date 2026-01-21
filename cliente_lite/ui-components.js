@@ -48,7 +48,7 @@ const LucideIcon = ({ name, size = 24, className, ...props }) => {
     'Briefcase', 'Lock', 'UserCheck', 'Loader2', 'Trash2', 'Undo2', 'MoreVertical',
     'CheckSquare', 'Printer', 'Eye', 'EyeOff', 'Mail', 'Activity', 'Server', 'Database', 'Globe',
     'ThumbsUp', 'ThumbsDown', 'Link', 'Download', 'Share2', 'History',
-    'BarChart2', 'List', 'Sparkles', 'Save', 'Wrench', 'LogOut', 'ChevronDown'
+    'BarChart2', 'List', 'Sparkles', 'Save', 'Wrench', 'LogOut', 'ChevronDown', 'CloudDownload'
 ];
 
 const Icons = {};
@@ -66,7 +66,7 @@ const {
     Briefcase, Lock, UserCheck, Loader2, Trash2, Undo2, MoreVertical,
     CheckSquare, Printer, Eye, Mail, Activity, Server, Database, Globe,
     ThumbsUp, ThumbsDown, LinkIcon, Download, Share2, History,
-    BarChart2, List, Sparkles, Wrench, LogOut, ChevronDown
+    BarChart2, List, Sparkles, Wrench, LogOut, ChevronDown, CloudDownload
 } = Icons;
 
 const Badge = ({ children, type = 'neutral', className = '' }) => {

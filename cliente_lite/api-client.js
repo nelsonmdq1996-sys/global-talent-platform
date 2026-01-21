@@ -203,6 +203,23 @@ const api = {
                         return { ok: false, error: e.message };
                     }
                 },
+                repararDesdeWorkDrive: async (id) => {
+                    try {
+                        const headers = await getHeaders({ 'Content-Type': 'application/json' });
+                        const res = await fetch(`${API_URL}/candidatos/${id}/reparar-desde-workdrive`, {
+                            method: 'POST',
+                            headers: headers
+                        });
+                        const data = await res.json();
+                        if (!res.ok) {
+                            throw new Error(data.error || 'Error al reparar desde WorkDrive');
+                        }
+                        return data;
+                    } catch (e) {
+                        console.error("Error reparando desde WorkDrive:", e);
+                        return { ok: false, error: e.message };
+                    }
+                },
                 analizar: async (id, responsable) => {
                     try {
                         const headers = await getHeaders({ 'Content-Type': 'application/json' });

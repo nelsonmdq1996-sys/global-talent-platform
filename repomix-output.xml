@@ -62,10 +62,167 @@ logo.png
 package.json
 plantilla.docx
 README.md
+services/fichaGenerator.js
+zohoWorkDrive.js
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="zohoWorkDrive.js">
+// zohoWorkDrive.js
+const axios = require('axios');
+
+// Cache del access token
+let accessTokenCache = {
+  token: null,
+  expiresAt: 0
+};
+
+/**
+ * Obtiene un access token válido de Zoho (usa refresh token)
+ */
+async function getZohoAccessToken() {
+  // Si el token en cache aún es válido, usarlo
+  if (accessTokenCache.token && Date.now() < accessTokenCache.expiresAt - 60000) {
+    return accessTokenCache.token;
+  }
+
+  const region = process.env.ZOHO_REGION || 'eu';
+  const tokenUrl = `https://accounts.zoho.${region}/oauth/v2/token`;
+
+  try {
+    const response = await axios.post(tokenUrl, null, {
+      params: {
+        refresh_token: process.env.ZOHO_REFRESH_TOKEN,
+        client_id: process.env.ZOHO_CLIENT_ID,
+        client_secret: process.env.ZOHO_CLIENT_SECRET,
+        grant_type: 'refresh_token'
+      }
+    });
+
+    // Guardar en cache (expira en 1 hora normalmente)
+    accessTokenCache = {
+      token: response.data.access_token,
+      expiresAt: Date.now() + (response.data.expires_in * 1000)
+    };
+
+    console.log('✅ [WorkDrive] Token de acceso obtenido correctamente');
+    return accessTokenCache.token;
+
+  } catch (error) {
+    console.error('❌ [WorkDrive] Error obteniendo token:', error.response?.data || error.message);
+    throw new Error('No se pudo autenticar con Zoho WorkDrive');
+  }
+}
+
+/**
+ * Busca un archivo en WorkDrive por nombre
+ * @param {string} searchQuery - Nombre o parte del nombre del archivo
+ * @param {string} folderId - ID de la carpeta donde buscar (opcional)
+ */
+async function buscarArchivoEnWorkDrive(searchQuery, folderId = null) {
+  const token = await getZohoAccessToken();
+  const region = process.env.ZOHO_REGION || 'eu';
+  
+  // Si no se especifica carpeta, usar la configurada por defecto
+  const targetFolder = folderId || process.env.ZOHO_WORKDRIVE_FOLDER_ID;
+
+  try {
+    // Endpoint de búsqueda de WorkDrive
+    const searchUrl = `https://workdrive.zoho.${region}/api/v1/files/search`;
+    
+    const response = await axios.get(searchUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      params: {
+        search_string: searchQuery,
+        parent_id: targetFolder, // Limitar búsqueda a la carpeta de CVs
+        type: 'file',
+        per_page: 10
+      }
+    });
+
+    const archivos = response.data?.data || [];
+    console.log(`🔍 [WorkDrive] Búsqueda "${searchQuery}": ${archivos.length} resultados`);
+    
+    return archivos;
+
+  } catch (error) {
+    console.error('❌ [WorkDrive] Error en búsqueda:', error.response?.data || error.message);
+    throw new Error(`Error buscando en WorkDrive: ${error.message}`);
+  }
+}
+
+/**
+ * Descarga un archivo de WorkDrive por su ID
+ * @param {string} fileId - ID del archivo en WorkDrive
+ * @returns {Buffer} - Contenido del archivo
+ */
+async function descargarArchivoDeWorkDrive(fileId) {
+  const token = await getZohoAccessToken();
+  const region = process.env.ZOHO_REGION || 'eu';
+
+  try {
+    // Endpoint de descarga
+    const downloadUrl = `https://workdrive.zoho.${region}/api/v1/download/${fileId}`;
+    
+    const response = await axios.get(downloadUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      responseType: 'arraybuffer',
+      timeout: 60000, // 60 segundos
+      maxContentLength: 20 * 1024 * 1024 // 20MB máximo
+    });
+
+    console.log(`✅ [WorkDrive] Archivo descargado: ${(response.data.length / 1024).toFixed(2)} KB`);
+    return Buffer.from(response.data);
+
+  } catch (error) {
+    console.error('❌ [WorkDrive] Error descargando:', error.response?.data || error.message);
+    throw new Error(`Error descargando de WorkDrive: ${error.message}`);
+  }
+}
+
+/**
+ * Lista archivos en una carpeta de WorkDrive
+ * @param {string} folderId - ID de la carpeta
+ */
+async function listarArchivosEnCarpeta(folderId = null) {
+  const token = await getZohoAccessToken();
+  const region = process.env.ZOHO_REGION || 'eu';
+  const targetFolder = folderId || process.env.ZOHO_WORKDRIVE_FOLDER_ID;
+
+  try {
+    const listUrl = `https://workdrive.zoho.${region}/api/v1/files/${targetFolder}/files`;
+    
+    const response = await axios.get(listUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      params: {
+        per_page: 100
+      }
+    });
+
+    return response.data?.data || [];
+
+  } catch (error) {
+    console.error('❌ [WorkDrive] Error listando carpeta:', error.response?.data || error.message);
+    throw new Error(`Error listando carpeta de WorkDrive: ${error.message}`);
+  }
+}
+
+module.exports = {
+  getZohoAccessToken,
+  buscarArchivoEnWorkDrive,
+  descargarArchivoDeWorkDrive,
+  listarArchivosEnCarpeta
+};
+</file>
 
 <file path=".cursorrules">
 # 🤖 Ariel's Tech Lead & Pair Programmer Rules
@@ -322,6 +479,702 @@ body {
 
 <file path="FETCH_HEAD">
 
+</file>
+
+<file path="services/fichaGenerator.js">
+// ============================================================
+// services/fichaGenerator.js
+// REEMPLAZA: ficha.py y ficha2.py
+// ============================================================
+
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { Document, Packer, Paragraph, Table, TableRow, TableCell, 
+        WidthType, BorderStyle, TextRun, AlignmentType, 
+        HeadingLevel, ShadingType } = require("docx");
+const path = require("path");
+const fs = require("fs");
+const pdfParse = require("pdf-parse");
+const mammoth = require("mammoth");
+
+// Inicializar Gemini
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+// ============================================================
+// CONSTANTES (migradas de Python)
+// ============================================================
+const TOOLS_USAGE = {
+  "autocad": "Diseño y planos arquitectónicos",
+  "revit": "Modelado BIM y coordinación",
+  "sketchup": "Modelado 3D y visualización",
+  "archicad": "Modelado BIM y documentación",
+  "photoshop": "Edición y retoque de imágenes",
+  "illustrator": "Gráficos vectoriales y piezas",
+  "microsoft project": "Planificación y seguimiento",
+  "microsoft office": "Documentación y presentaciones",
+  "microsoft excel": "Modelado y análisis de datos",
+  "excel": "Modelado y análisis de datos",
+  "google workspace": "Colaboración y productividad",
+  "google calendar": "Gestión de agenda y reuniones",
+  "asana": "Gestión y priorización de tareas",
+  "trello": "Tableros kanban y seguimiento",
+  "notion": "Documentación de procesos",
+  "metricool": "Analítica y programación social",
+  "mailchimp": "Email marketing y automatización",
+  "pipedrive": "Gestión de ventas y CRM",
+  "canva": "Diseño rápido de piezas",
+  "meta ads": "Gestión de campañas en Meta",
+  "google ads": "Publicidad y performance",
+  "odoo": "ERP y procesos contables",
+  "sap": "ERP corporativo",
+  "slack": "Mensajería y colaboración",
+  "discord": "Comunicación por canales",
+  "hubspot": "CRM y marketing automation",
+  "salesforce": "CRM empresarial",
+  "jira": "Gestión de proyectos ágiles",
+  "figma": "Diseño de interfaces UI/UX",
+  "python": "Desarrollo y automatización",
+  "javascript": "Desarrollo web frontend/backend",
+  "react": "Desarrollo de interfaces web",
+  "node": "Backend y APIs",
+};
+
+const TOOL_SYNONYMS = {
+  "project": "Microsoft Project",
+  "ms project": "Microsoft Project",
+  "office": "Microsoft Office",
+  "excel": "Microsoft Excel",
+  "g suite": "Google Workspace",
+  "google suite": "Google Workspace",
+  "calendar": "Google Calendar",
+  "google calendar": "Google Calendar",
+  "autocad": "AutoCAD",
+  "sketchup": "SketchUp",
+  "adwords": "Google Ads",
+  "facebook ads": "Meta Ads",
+};
+
+// ============================================================
+// HELPERS DE LECTURA DE ARCHIVOS
+// ============================================================
+
+/**
+ * Lee texto de un PDF
+ */
+async function extractTextFromPDF(filePath) {
+  try {
+    const dataBuffer = fs.readFileSync(filePath);
+    const data = await pdfParse(dataBuffer);
+    return data.text || "";
+  } catch (error) {
+    console.error("Error extrayendo texto de PDF:", error.message);
+    return "";
+  }
+}
+
+/**
+ * Lee texto de un DOCX
+ */
+async function extractTextFromDOCX(filePath) {
+  try {
+    const result = await mammoth.extractRawText({ path: filePath });
+    return result.value || "";
+  } catch (error) {
+    console.error("Error extrayendo texto de DOCX:", error.message);
+    return "";
+  }
+}
+
+/**
+ * Lee texto de cualquier archivo (PDF, DOCX, TXT)
+ */
+async function readCVAny(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return "";
+  
+  const ext = path.extname(filePath).toLowerCase();
+  
+  if (ext === ".pdf") {
+    return await extractTextFromPDF(filePath);
+  } else if (ext === ".docx") {
+    return await extractTextFromDOCX(filePath);
+  } else {
+    // Asumir texto plano
+    return fs.readFileSync(filePath, "utf8");
+  }
+}
+
+// ============================================================
+// EXTRACCIÓN DE HERRAMIENTAS CON %
+// ============================================================
+
+/**
+ * Normaliza el nombre de una herramienta
+ */
+function normalizeTool(name) {
+  let s = (name || "").trim();
+  
+  // Remover frases como "He utilizado", "uso de", etc.
+  s = s.replace(
+    /(?:he\s+utilizado|he\s+usado|he\s+manejado|utilizo|uso|manejo|conocimiento\s+de|experiencia\s+en|trabajo\s+con|uso\s+de|herramientas?\s+de)[:\-]?\s*/gi,
+    ""
+  ).trim();
+  
+  // Aplicar sinónimos
+  const lower = s.toLowerCase();
+  if (TOOL_SYNONYMS[lower]) {
+    return TOOL_SYNONYMS[lower];
+  }
+  
+  // Capitalizar primera letra
+  if (s && s[0] === s[0].toLowerCase()) {
+    s = s[0].toUpperCase() + s.slice(1);
+  }
+  
+  return s;
+}
+
+/**
+ * Adivina el uso de una herramienta
+ */
+function guessToolUsage(name) {
+  const key = (name || "").toLowerCase();
+  
+  if (TOOLS_USAGE[key]) return TOOLS_USAGE[key];
+  
+  // Heurísticas por familia
+  if (key.includes("excel") || key.includes("sheet")) {
+    return "Modelado y análisis de datos en hojas de cálculo";
+  }
+  if (key.includes("calendar") || key.includes("agenda")) {
+    return "Gestión de agenda, eventos y reuniones";
+  }
+  if (["slack", "discord", "teams", "whatsapp", "telegram"].some(w => key.includes(w))) {
+    return "Mensajería y colaboración en equipos";
+  }
+  if (["ads", "sem", "seo", "mailchimp", "metricool"].some(w => key.includes(w))) {
+    return "Gestión de campañas de marketing digital";
+  }
+  if (["crm", "pipedrive", "hubspot", "salesforce"].some(w => key.includes(w))) {
+    return "Gestión de oportunidades comerciales en CRM";
+  }
+  if (["project", "asana", "trello", "notion", "jira"].some(w => key.includes(w))) {
+    return "Planificación y seguimiento de proyectos";
+  }
+  if (["autocad", "revit", "archicad", "sketchup"].some(w => key.includes(w))) {
+    return "Modelado y documentación técnica";
+  }
+  if (["photoshop", "illustrator", "canva", "figma"].some(w => key.includes(w))) {
+    return "Diseño y edición de piezas visuales";
+  }
+  
+  return "Aplicación práctica en el área";
+}
+
+/**
+ * Extrae herramientas con porcentaje del texto
+ * Ejemplo: "Excel - 90%" o "Photoshop 85%"
+ */
+function extractToolsWithPercent(text, maxN = 40) {
+  const cleanText = (text || "").replace(/\r/g, "");
+  const candidates = [];
+  
+  // Regex para: "Herramienta - 85%" o "Herramienta: 90%" o "Herramienta 80%"
+  const regex = /([A-Za-zÁ-ÿ][A-Za-zÁ-ÿ0-9 .+/_()-]{1,}?)\s*[:\-–—]?\s*(\d{1,3})\s*%/gi;
+  
+  let match;
+  while ((match = regex.exec(cleanText)) !== null) {
+    const name = normalizeTool(match[1]);
+    const pct = Math.min(Math.max(parseInt(match[2]), 0), 100);
+    
+    // Solo si el nombre tiene al menos 3 letras
+    if (name.replace(/[^A-Za-zÁ-ÿ]/g, "").length >= 3) {
+      candidates.push({ 
+        herramienta: name, 
+        nivel: `${pct}%`,
+        uso: guessToolUsage(name)
+      });
+    }
+  }
+  
+  // Deduplicar (quedarse con el mayor %)
+  const merged = {};
+  for (const c of candidates) {
+    const key = c.herramienta.toLowerCase();
+    if (!merged[key] || parseInt(c.nivel) > parseInt(merged[key].nivel)) {
+      merged[key] = c;
+    }
+  }
+  
+  // Ordenar por % descendente y limitar
+  return Object.values(merged)
+    .sort((a, b) => parseInt(b.nivel) - parseInt(a.nivel))
+    .slice(0, maxN);
+}
+
+// ============================================================
+// LLAMADA A IA (GEMINI) - Reemplaza OpenAI
+// ============================================================
+
+/**
+ * Extrae todos los campos usando Gemini (ficha2.py style)
+ */
+async function aiExtractFields(fullText, cvText, tools) {
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+  
+  // Truncar CV si es muy largo
+  const cvTruncated = cvText.length > 45000 
+    ? cvText.slice(0, 45000) + "\n...[TRUNCADO]..." 
+    : cvText;
+  
+  const prompt = `
+Eres analista de RRHH. Genera un informe profesional en ESPAÑOL NEUTRO.
+
+Devuelve SOLO JSON válido (sin markdown, sin \`\`\`). Estructura EXACTA:
+
+{
+  "fecha": "Fecha actual",
+  "puesto": "Puesto detectado o 'Asistente Virtual'",
+  "nombre": "Nombre completo del candidato",
+  "resumen_ejecutivo": "Párrafo de 5-8 líneas describiendo el perfil profesional",
+  "ficha_tecnica": {
+    "ubicacion": "Ciudad, País",
+    "nivel_experiencia": "Junior/Semi-Senior/Senior",
+    "formacion_formal": "Título principal",
+    "nivel_ingles": "Básico/Intermedio/Avanzado/Nativo",
+    "disponibilidad": "Inmediata/2 semanas/etc"
+  },
+  "competencias_tecnicas": [
+    {"competencia": "Área de conocimiento (NO software)", "nivel": "Alto/Medio/Básico"}
+  ],
+  "habilidades_blandas": [
+    {"habilidad": "Soft skill", "nivel": "Alto/Medio/Básico"}
+  ],
+  "herramientas": [
+    {"herramienta": "Software/Plataforma", "nivel": "NN% o Avanzado/Intermedio/Básico"}
+  ],
+  "plus": "Puntos fuertes adicionales del candidato",
+  "formacion_sugerida": "Áreas de mejora o capacitación recomendada",
+  "recomendacion_final": "Veredicto final sobre el candidato",
+  "responsable": "Departamento de Recursos Humanos"
+}
+
+REGLAS CRÍTICAS:
+1. 'competencias_tecnicas': ÁREAS DE CONOCIMIENTO (Ej: 'Gestión de Proyectos', 'Contabilidad'). PROHIBIDO poner software aquí.
+2. 'herramientas': SOLO SOFTWARE y PLATAFORMAS (Ej: 'Excel', 'Python', 'Jira').
+3. Si la lista de herramientas detectadas está incompleta, EXTRAE LAS HERRAMIENTAS DEL CV.
+4. 'habilidades_blandas': Solo soft skills.
+
+=== TEXTO/NOTAS DEL RECLUTADOR ===
+${fullText.slice(0, 15000)}
+
+=== CV DEL CANDIDATO ===
+${cvTruncated.slice(0, 20000)}
+
+=== HERRAMIENTAS DETECTADAS (priorizar estas) ===
+${JSON.stringify(tools, null, 2)}
+
+Responde SOLO con el JSON, sin explicaciones ni markdown.
+`;
+
+  const result = await model.generateContent(prompt);
+  let text = result.response.text()
+    .replace(/```json/g, "").replace(/```/g, "").trim();
+  
+  // Extraer JSON limpio
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    text = text.substring(firstBrace, lastBrace + 1);
+  }
+  
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    console.error("Error parseando JSON de Gemini:", e.message);
+    data = {};
+  }
+  
+  // Si regex encontró herramientas, fusionar con las de IA
+  if (tools && tools.length > 0) {
+    const existingNames = new Set((data.herramientas || []).map(t => t.herramienta?.toLowerCase()));
+    const merged = [...(data.herramientas || [])];
+    
+    for (const tool of tools) {
+      if (!existingNames.has(tool.herramienta.toLowerCase())) {
+        merged.push(tool);
+      }
+    }
+    data.herramientas = merged;
+  }
+  
+  return data;
+}
+
+/**
+ * Normaliza competencias - mueve software a herramientas
+ */
+function normalizeSkills(data) {
+  const softwareKeywords = [
+    "excel", "word", "powerpoint", "office", "photoshop", "illustrator",
+    "figma", "canva", "trello", "asana", "jira", "python", "java",
+    "javascript", "react", "angular", "node", "html", "css", "sql",
+    "salesforce", "sap", "hubspot", "vs code", "postman", "git", "github"
+  ];
+  
+  const comps = data.competencias_tecnicas || [];
+  const tools = data.herramientas || [];
+  const newComps = [];
+  
+  for (const item of comps) {
+    const nombre = (item.competencia || "").toLowerCase();
+    const esSoftware = softwareKeywords.some(sw => nombre.includes(sw));
+    
+    if (esSoftware) {
+      // Mover a herramientas
+      const exists = tools.some(t => (t.herramienta || "").toLowerCase() === nombre);
+      if (!exists) {
+        tools.push({
+          herramienta: item.competencia,
+          nivel: item.nivel || "Se menciona"
+        });
+      }
+    } else {
+      newComps.push(item);
+    }
+  }
+  
+  data.competencias_tecnicas = newComps;
+  data.herramientas = tools;
+  return data;
+}
+
+// ============================================================
+// GENERADOR DE DOCX
+// ============================================================
+
+/**
+ * Crea una celda de tabla con estilo
+ */
+function createStyledCell(text, options = {}) {
+  const { bold = false, shading = null, width = null } = options;
+  
+  const cellOptions = {
+    children: [
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: text || "",
+            bold,
+            font: "Times New Roman",
+            size: 22, // 11pt
+          })
+        ],
+        alignment: AlignmentType.LEFT,
+      })
+    ],
+  };
+  
+  if (shading) {
+    cellOptions.shading = { fill: shading, type: ShadingType.CLEAR };
+  }
+  
+  if (width) {
+    cellOptions.width = { size: width, type: WidthType.DXA };
+  }
+  
+  return new TableCell(cellOptions);
+}
+
+/**
+ * Crea una tabla con bordes
+ */
+function createBorderedTable(rows, columnWidths = null) {
+  const tableRows = rows.map((rowData, rowIndex) => {
+    const cells = rowData.map((cellData, colIndex) => {
+      const isHeader = rowIndex === 0;
+      return createStyledCell(
+        typeof cellData === "string" ? cellData : cellData.text,
+        {
+          bold: isHeader || cellData.bold,
+          shading: isHeader ? "E7EEF8" : null,
+          width: columnWidths ? columnWidths[colIndex] : null
+        }
+      );
+    });
+    return new TableRow({ children: cells });
+  });
+  
+  return new Table({
+    rows: tableRows,
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: {
+      top: { style: BorderStyle.SINGLE, size: 1 },
+      bottom: { style: BorderStyle.SINGLE, size: 1 },
+      left: { style: BorderStyle.SINGLE, size: 1 },
+      right: { style: BorderStyle.SINGLE, size: 1 },
+      insideHorizontal: { style: BorderStyle.SINGLE, size: 1 },
+      insideVertical: { style: BorderStyle.SINGLE, size: 1 },
+    }
+  });
+}
+
+/**
+ * Genera el documento DOCX completo
+ */
+async function renderDocx(outputPath, data, logoPath = null) {
+  const fecha = data.fecha || new Date().toLocaleDateString("es-ES", {
+    year: "numeric", month: "long", day: "numeric"
+  });
+  
+  const sections = [];
+  
+  // === ENCABEZADO ===
+  sections.push(
+    new Paragraph({
+      children: [
+        new TextRun({
+          text: "INFORME DE EVALUACIÓN PROFESIONAL",
+          bold: true,
+          size: 32,
+          font: "Times New Roman",
+        })
+      ],
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 200 }
+    }),
+    new Paragraph({
+      children: [
+        new TextRun({
+          text: `Fecha: ${fecha}`,
+          size: 22,
+          font: "Times New Roman",
+        })
+      ],
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 400 }
+    })
+  );
+  
+  // === FICHA TÉCNICA ===
+  const ficha = data.ficha_tecnica || {};
+  sections.push(
+    new Paragraph({
+      children: [new TextRun({ text: "FICHA TÉCNICA", bold: true, size: 24 })],
+      spacing: { before: 200, after: 100 }
+    }),
+    createBorderedTable([
+      ["Campo", "Valor"],
+      ["Nombre", data.nombre || ficha.nombre || "-"],
+      ["Puesto", data.puesto || "-"],
+      ["Ubicación", ficha.ubicacion || "-"],
+      ["Nivel de Experiencia", ficha.nivel_experiencia || "-"],
+      ["Formación", ficha.formacion_formal || "-"],
+      ["Nivel de Inglés", ficha.nivel_ingles || "-"],
+      ["Disponibilidad", ficha.disponibilidad || "-"],
+    ], [3000, 6000])
+  );
+  
+  // === RESUMEN EJECUTIVO ===
+  if (data.resumen_ejecutivo) {
+    sections.push(
+      new Paragraph({
+        children: [new TextRun({ text: "RESUMEN EJECUTIVO", bold: true, size: 24 })],
+        spacing: { before: 300, after: 100 }
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: data.resumen_ejecutivo, size: 22 })],
+        alignment: AlignmentType.JUSTIFIED,
+        spacing: { after: 200 }
+      })
+    );
+  }
+  
+  // === COMPETENCIAS TÉCNICAS ===
+  if (data.competencias_tecnicas?.length) {
+    sections.push(
+      new Paragraph({
+        children: [new TextRun({ text: "COMPETENCIAS TÉCNICAS", bold: true, size: 24 })],
+        spacing: { before: 300, after: 100 }
+      }),
+      createBorderedTable([
+        ["Competencia", "Nivel"],
+        ...data.competencias_tecnicas.map(c => [c.competencia || "-", c.nivel || "-"])
+      ], [6000, 3000])
+    );
+  }
+  
+  // === HABILIDADES BLANDAS ===
+  if (data.habilidades_blandas?.length) {
+    sections.push(
+      new Paragraph({
+        children: [new TextRun({ text: "HABILIDADES BLANDAS", bold: true, size: 24 })],
+        spacing: { before: 300, after: 100 }
+      }),
+      createBorderedTable([
+        ["Habilidad", "Nivel"],
+        ...data.habilidades_blandas.map(h => [h.habilidad || "-", h.nivel || "-"])
+      ], [6000, 3000])
+    );
+  }
+  
+  // === HERRAMIENTAS ===
+  if (data.herramientas?.length) {
+    sections.push(
+      new Paragraph({
+        children: [new TextRun({ text: "HERRAMIENTAS TECNOLÓGICAS", bold: true, size: 24 })],
+        spacing: { before: 300, after: 100 }
+      }),
+      createBorderedTable([
+        ["Herramienta", "Nivel"],
+        ...data.herramientas.map(h => [h.herramienta || "-", h.nivel || "-"])
+      ], [6000, 3000])
+    );
+  }
+  
+  // === PLUS ===
+  if (data.plus) {
+    sections.push(
+      new Paragraph({
+        children: [new TextRun({ text: "PUNTOS FUERTES", bold: true, size: 24 })],
+        spacing: { before: 300, after: 100 }
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: data.plus, size: 22 })],
+        alignment: AlignmentType.JUSTIFIED,
+        spacing: { after: 200 }
+      })
+    );
+  }
+  
+  // === FORMACIÓN SUGERIDA ===
+  if (data.formacion_sugerida) {
+    sections.push(
+      new Paragraph({
+        children: [new TextRun({ text: "FORMACIÓN SUGERIDA", bold: true, size: 24 })],
+        spacing: { before: 300, after: 100 }
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: data.formacion_sugerida, size: 22 })],
+        alignment: AlignmentType.JUSTIFIED,
+        spacing: { after: 200 }
+      })
+    );
+  }
+  
+  // === RECOMENDACIÓN FINAL ===
+  if (data.recomendacion_final) {
+    sections.push(
+      new Paragraph({
+        children: [new TextRun({ text: "RECOMENDACIÓN FINAL", bold: true, size: 24 })],
+        spacing: { before: 300, after: 100 }
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: data.recomendacion_final, size: 22 })],
+        alignment: AlignmentType.JUSTIFIED,
+        spacing: { after: 200 }
+      })
+    );
+  }
+  
+  // === RESPONSABLE ===
+  sections.push(
+    new Paragraph({
+      children: [
+        new TextRun({
+          text: `\n\nResponsable: ${data.responsable || "Departamento de Recursos Humanos"}`,
+          italics: true,
+          size: 20
+        })
+      ],
+      alignment: AlignmentType.RIGHT,
+      spacing: { before: 400 }
+    })
+  );
+  
+  // Crear documento
+  const doc = new Document({
+    sections: [{
+      properties: {},
+      children: sections
+    }]
+  });
+  
+  // Guardar
+  const buffer = await Packer.toBuffer(doc);
+  fs.writeFileSync(outputPath, buffer);
+  
+  return outputPath;
+}
+
+// ============================================================
+// FUNCIÓN PRINCIPAL (equivalente a main() de Python)
+// ============================================================
+
+/**
+ * Genera una ficha completa desde texto + CV
+ * @param {Object} options
+ * @param {string} options.cvPath - Ruta al archivo CV (PDF/DOCX)
+ * @param {string} options.extraText - Texto adicional (notas del reclutador)
+ * @param {string} options.outputDir - Directorio de salida
+ * @param {string} options.baseName - Nombre base del archivo
+ * @param {string} [options.logoPath] - Ruta al logo (opcional)
+ * @returns {Promise<{ok: boolean, docx: string, mapping: Object}>}
+ */
+async function generarFicha({ cvPath, extraText, outputDir, baseName, logoPath = null }) {
+  console.log("[fichaGenerator] Iniciando generación...");
+  
+  // 1. Leer CV
+  const cvText = await readCVAny(cvPath);
+  console.log(`[fichaGenerator] CV leído: ${cvText.length} caracteres`);
+  
+  // 2. Extraer herramientas con % del texto
+  const tools = extractToolsWithPercent(extraText);
+  console.log(`[fichaGenerator] Herramientas detectadas: ${tools.length}`);
+  
+  // 3. Llamar a IA
+  let data = await aiExtractFields(extraText, cvText, tools);
+  console.log("[fichaGenerator] IA procesada");
+  
+  // 4. Normalizar (mover software de competencias a herramientas)
+  data = normalizeSkills(data);
+  
+  // 5. Generar DOCX
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+  
+  const outputPath = path.join(outputDir, `${baseName}.docx`);
+  await renderDocx(outputPath, data, logoPath);
+  console.log(`[fichaGenerator] DOCX generado: ${outputPath}`);
+  
+  return {
+    ok: true,
+    docx: outputPath,
+    mapping: data
+  };
+}
+
+// ============================================================
+// EXPORTS
+// ============================================================
+
+module.exports = {
+  // Funciones principales
+  generarFicha,
+  
+  // Helpers (por si se necesitan individualmente)
+  readCVAny,
+  extractTextFromPDF,
+  extractTextFromDOCX,
+  extractToolsWithPercent,
+  aiExtractFields,
+  normalizeSkills,
+  renderDocx,
+  
+  // Utilidades
+  normalizeTool,
+  guessToolUsage,
+};
 </file>
 
 <file path="cliente_lite/Untitled">
@@ -1222,7 +2075,7 @@ const LucideIcon = ({ name, size = 24, className, ...props }) => {
     'Briefcase', 'Lock', 'UserCheck', 'Loader2', 'Trash2', 'Undo2', 'MoreVertical',
     'CheckSquare', 'Printer', 'Eye', 'EyeOff', 'Mail', 'Activity', 'Server', 'Database', 'Globe',
     'ThumbsUp', 'ThumbsDown', 'Link', 'Download', 'Share2', 'History',
-    'BarChart2', 'List', 'Sparkles', 'Save', 'Wrench', 'LogOut', 'ChevronDown'
+    'BarChart2', 'List', 'Sparkles', 'Save', 'Wrench', 'LogOut', 'ChevronDown', 'CloudDownload'
 ];
 
 const Icons = {};
@@ -1240,7 +2093,7 @@ const {
     Briefcase, Lock, UserCheck, Loader2, Trash2, Undo2, MoreVertical,
     CheckSquare, Printer, Eye, Mail, Activity, Server, Database, Globe,
     ThumbsUp, ThumbsDown, LinkIcon, Download, Share2, History,
-    BarChart2, List, Sparkles, Wrench, LogOut, ChevronDown
+    BarChart2, List, Sparkles, Wrench, LogOut, ChevronDown, CloudDownload
 } = Icons;
 
 const Badge = ({ children, type = 'neutral', className = '' }) => {
@@ -1586,6 +2439,18 @@ const api = {
                     } catch (e) {
                         console.error("Error reparando CV:", e);
                         return { ok: false, error: e.message };
+                    }
+                },
+                repararDesdeWorkDrive: async (id) => {
+                    try {
+                        const res = await fetch(`${API_URL}/candidatos/${id}/reparar-desde-workdrive`, {
+                            method: 'POST',
+                            headers: await getAuthHeaders()
+                        });
+                        return await res.json();
+                    } catch (error) {
+                        console.error("Error reparando desde WorkDrive:", error);
+                        throw new Error('Error al reparar desde WorkDrive');
                     }
                 },
                 analizar: async (id, responsable) => {
@@ -2194,11 +3059,53 @@ window.API_URL = API_URL;
         );
         }
 
+        // --- LISTA COMPARTIDA DE PUESTOS DISPONIBLES ---
+        const PUESTOS_DISPONIBLES = [
+            "Asistente Administrativo Inteligente",
+            "Asistente de Arquitectura",
+            "Asistente de Comunicación Corporativa",
+            "Asistente Financiero y Contable",
+            "Asistente de Marketing Digital",
+            "Asistente para E commerce",
+            "Asistente para Desarrollo Web",
+            "Asistente de Diseño Gráfico",
+            "Asistente de Automatización con IA",
+            "Asistente de Gestión y Calidad",
+            "Asistente de Recursos Humanos",
+            "Asistente de Gestión de Procesos",
+            "Asistente Diseñador/a de Productos e Interiores",
+            "Asistente Técnico/a de Proyectos Acústicos",
+            "Asistente de Atención al Cliente",
+            "Asistente de Ventas y Prospección",
+            "Asistente de Soporte Técnico/TI",
+            "Asistente Valoración Inmobiliaria y Tasación",
+            "Asistente Diseñador UX/UI",
+            "Asistente Desarrollador/a Senior - Magnolia CMS",
+            "Asistente Delineante técnico",
+            "Asistente Ingeniero/a de Caminos",
+            "Asistente de Gestión de Proyectos",
+            "Asistente Virtual Ejecutiva",
+            "Asistente Project Manager",
+            "Asistente de Marketing con Elementor",
+            "Asistente Especialista en Calidad con Power BI",
+            "Asistente Ingeniero Mecatronico/Automatización",
+            "Asistente en Estrategia y Operaciones",
+            "Asistente Financiero",
+            "Asistente Desarrollador/a de Automatizaciones Zoho",
+            "Asistente Aparejador / Arquitecto Técnico",
+            "Asistente Comercial - Remodelaciones, Reformas y Construcción",
+            "Asistente Desarrollador Odoo + Shopify",
+            "Asistente Programador web (Power BI + Integración ERP/CRM",
+            "Asistente de Seguridad y Salud Laboral",
+            "Asistente de Operaciones Comerciales"
+        ];
+
         // --- NUEVA VISTA: BUSQUEDA Y TRACKING ---
         function SearchView({ candidates, onSelect }) {
             const [searchTerm, setSearchTerm] = useState('');
             const [debouncedTerm, setDebouncedTerm] = useState('');  //agregado Debounce
             const [roleFilter, setRoleFilter] = useState('Todos');
+            const [isFilterOpen, setIsFilterOpen] = useState(false);
 
             useEffect(() => {
                 const timer = setTimeout(() => {
@@ -2206,17 +3113,31 @@ window.API_URL = API_URL;
                 }, 300);
                 return () => clearTimeout(timer); // Limpia el timer si el usuario sigue escribiendo
             }, [searchTerm]);
+
+            // Cerrar dropdown al hacer clic fuera
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (isFilterOpen && !event.target.closest('.filter-dropdown-container')) {
+                        setIsFilterOpen(false);
+                    }
+                };
+                if (isFilterOpen) {
+                    document.addEventListener('mousedown', handleClickOutside);
+                    return () => document.removeEventListener('mousedown', handleClickOutside);
+                }
+            }, [isFilterOpen]);
         
             // 3. Ahora filtramos usando 'debouncedTerm' en lugar de 'searchTerm'
            
             const results = candidates.filter(c => {
                 const matchesText = c.nombre.toLowerCase().includes(debouncedTerm.toLowerCase()) || 
                                   c.email.toLowerCase().includes(debouncedTerm.toLowerCase());
-                const matchesRole = roleFilter === 'Todos' || c.puesto.includes(roleFilter);
+                const matchesRole = roleFilter === 'Todos' || c.puesto === roleFilter;
                 return matchesText && matchesRole;
             });
 
-            const roles = ['Todos', ...new Set(candidates.map(c => c.puesto))];
+            // Usar todos los puestos disponibles
+            const roles = ['Todos', ...PUESTOS_DISPONIBLES];
 
             return (
                 <div className="h-full flex flex-col max-w-7xl mx-auto">
@@ -2225,24 +3146,45 @@ window.API_URL = API_URL;
                         <p className="text-slate-400 text-sm mt-1">Localiza candidatos y revisa su estado actual.</p>
                     </div>
 
-                    <div className="flex gap-4 mb-6">
+                    <div className="flex gap-4 mb-6 items-stretch">
                         <div className="relative flex-1">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16}/>
                             <input 
                                 type="text" 
                                 placeholder="Buscar por nombre o email..." 
-                                className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-white focus:border-blue-500 focus:outline-none"
+                                className="w-full h-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-white focus:border-blue-500 focus:outline-none"
                                 value={searchTerm}
                                 onChange={e => setSearchTerm(e.target.value)}
                             />
                         </div>
-                        <select 
-                            className="px-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-white text-sm focus:border-blue-500 focus:outline-none"
-                            value={roleFilter}
-                            onChange={e => setRoleFilter(e.target.value)}
-                        >
-                            {roles.map(r => <option key={r} value={r}>{r}</option>)}
-                        </select>
+                        <div className="relative filter-dropdown-container flex">
+                            <button
+                                onClick={() => setIsFilterOpen(!isFilterOpen)}
+                                className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-white text-sm hover:border-blue-500 focus:border-blue-500 focus:outline-none transition-colors h-full"
+                            >
+                                <Filter size={16} />
+                                <span className="min-w-[100px] text-left">{roleFilter}</span>
+                                <ChevronDown size={16} className={`transition-transform ${isFilterOpen ? 'rotate-180' : ''}`} />
+                            </button>
+                            {isFilterOpen && (
+                                <div className="absolute top-full mt-2 right-0 bg-slate-900 border border-slate-800 rounded-xl shadow-xl z-50 max-h-[300px] overflow-y-auto min-w-[250px]">
+                                    {roles.map(r => (
+                                        <button
+                                            key={r}
+                                            onClick={() => {
+                                                setRoleFilter(r);
+                                                setIsFilterOpen(false);
+                                            }}
+                                            className={`w-full text-left px-4 py-2.5 text-sm text-white hover:bg-slate-800 transition-colors ${
+                                                roleFilter === r ? 'bg-blue-500/20 text-blue-400' : ''
+                                            }`}
+                                        >
+                                            {r}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex-1">
@@ -2354,46 +3296,8 @@ window.API_URL = API_URL;
     const [disponibilidad, setDisponibilidad] = React.useState('');
     const [herramientas, setHerramientas] = React.useState('');
     
-    // Lista de puestos disponibles
-    const puestosDisponibles = [
-        "Asistente Administrativo Inteligente",
-        "Asistente de Arquitectura",
-        "Asistente de Comunicacion Corporativa",
-        "Asistente Financiero y Contable",
-        "Asistente de Marketing Digital",
-        "Asistente para E commerce",
-        "Asistente para Desarrollo Web",
-        "Asistente de Diseño Grafico",
-        "Asistente de Automatizacion con IA",
-        "Asistente de Gestión y Calidad",
-        "Asistende de Recursos Humanos",
-        "Asistente de Gestión de Procesos",
-        "Asistente Diseñador/a de Productos e Interiores",
-        "Asistente Técnico/a de Proyectos Acústicos",
-        "Asistente de Atención al Cliente",
-        "Asistente de Ventas y Prospección",
-        "Asistente de Soporte Técnico/TI",
-        "Asistente Valoración Inmobiliaria y Tasación",
-        "Asistente Diseñador UX/UI",
-        "Aistente Desarrollador/a Senior - Magnolia CMS",
-        "Asistente Delineante técnico",
-        "Asistente Ingeniero/a de Caminos",
-        "Asistente de Gestión de Proyectos",
-        "Asistente Virtual Ejecutiva",
-        "Asistente Project Manager",
-        "Asistente de Marketing con Elementor",
-        "Asistente Especialista en Calidad con Power BI",
-        "Asistente Ingeniero Mecatrónico/Automatización",
-        "Asistente en Estrategia y Operaciones",
-        "Asistente Financiero",
-        "Asistente Desarrollador/a de Automatizaciones Zoho",
-        "Asistente Aparejador / Arquitecto Técnico",
-        "Asistente Comercial - Remodelariones, Reformas y Construcción",
-        "Asistente Desarrollador Odoo + Shopify",
-        "Asistente Programador web (Power BI + Integración ERP/CRM",
-        "Asistente de Seguridad y Salud Laboral",
-       
-    ];
+    // Usar la lista compartida de puestos disponibles
+    const puestosDisponibles = PUESTOS_DISPONIBLES;
     
     if (!isOpen) return null;
 
@@ -2609,6 +3513,8 @@ window.API_URL = API_URL;
 function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
     const [filter, setFilter] = useState('');
     const [debouncedFilter, setDebouncedFilter] = useState('');
+    const [roleFilter, setRoleFilter] = useState('Todos');
+    const [isFilterOpen, setIsFilterOpen] = useState(false);
     const [allCandidates, setAllCandidates] = useState(candidates);
     const [originalCandidates, setOriginalCandidates] = useState(candidates); // Guardar candidatos originales
     const [hasMore, setHasMore] = useState(false);
@@ -2653,6 +3559,19 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
         }, 300);
         return () => clearTimeout(timer);
     }, [filter]);
+
+    // Cerrar dropdown al hacer clic fuera
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (isFilterOpen && !event.target.closest('.filter-dropdown-container')) {
+                setIsFilterOpen(false);
+            }
+        };
+        if (isFilterOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => document.removeEventListener('mousedown', handleClickOutside);
+        }
+    }, [isFilterOpen]);
 
     // Función para cargar más candidatos
     const cargarMas = async () => {
@@ -2769,6 +3688,11 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
     const filtered = sortedCandidates.filter(c => {
         if (c.stage !== 'stage_1') return false;
         
+        // Filtro por puesto
+        const matchesRole = roleFilter === 'Todos' || c.puesto === roleFilter;
+        if (!matchesRole) return false;
+        
+        // Filtro de búsqueda de texto
         if (!debouncedFilter.trim()) return true; // Si no hay filtro, mostrar todos
         
         const termino = debouncedFilter.toLowerCase().trim();
@@ -2778,6 +3702,9 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
         
         return nombreMatch || emailMatch || puestoMatch;
     });
+
+    // Usar todos los puestos disponibles
+    const roles = ['Todos', ...PUESTOS_DISPONIBLES];
 
     
 
@@ -2795,7 +3722,7 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
                     <p className="text-slate-400 text-sm mt-2">Revisa los perfiles ingresados recientemente.</p>
                 </div>
                 
-                <div className="flex gap-3 w-full md:w-auto items-center">
+                <div className="flex gap-3 w-full md:w-auto items-stretch">
                     <div className="relative group flex-1 md:w-64">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16}/>
                         <input 
@@ -2803,8 +3730,36 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
                             placeholder="Buscar..." 
                             value={filter} 
                             onChange={(e) => setFilter(e.target.value)} 
-                            className="w-full pl-10 pr-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-slate-300 focus:border-blue-500 focus:outline-none transition-all placeholder-slate-600"
+                            className="w-full h-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-300 focus:border-blue-500 focus:outline-none transition-all placeholder-slate-600"
                         />
+                    </div>
+                    <div className="relative filter-dropdown-container flex">
+                        <button
+                            onClick={() => setIsFilterOpen(!isFilterOpen)}
+                            className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 border border-slate-800 rounded-lg text-white text-sm hover:border-blue-500 focus:border-blue-500 focus:outline-none transition-colors h-full"
+                        >
+                            <Filter size={16} />
+                            <span className="min-w-[100px] text-left text-xs">{roleFilter}</span>
+                            <ChevronDown size={16} className={`transition-transform ${isFilterOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                        {isFilterOpen && (
+                            <div className="absolute top-full mt-2 right-0 bg-slate-900 border border-slate-800 rounded-xl shadow-xl z-50 max-h-[300px] overflow-y-auto min-w-[250px]">
+                                {roles.map(r => (
+                                    <button
+                                        key={r}
+                                        onClick={() => {
+                                            setRoleFilter(r);
+                                            setIsFilterOpen(false);
+                                        }}
+                                        className={`w-full text-left px-4 py-2.5 text-sm text-white hover:bg-slate-800 transition-colors ${
+                                            roleFilter === r ? 'bg-blue-500/20 text-blue-400' : ''
+                                        }`}
+                                    >
+                                        {r}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     </div>
                     {/* BOTÓN ESTILIZADO CON ICONO */}
                     <button 
@@ -5351,8 +6306,10 @@ const handleConfirmDisqualified = () => {
                                             </p>
                                         </div>
                                     </a>
-                                    {/* 🔧 BOTÓN DE REPARACIÓN: Solo mostrar si hay reseña_cv pero no cv_url */}
-                                    {candidate.reseña_cv && (!candidate.cv_url || candidate.cv_url.length <= 5) && (
+                                    {/* 🔧 BOTÓN REPARAR - Mostrar si: score=0, no tiene PDF, o tiene reseña pero no URL */}
+                                    {(candidate.ia_score === 0 || candidate.ia_score === null || 
+                                        !candidate.tiene_pdf || 
+                                        (candidate.reseña_cv && (!candidate.cv_url || candidate.cv_url.length <= 5))) && (
                                         <button
                                             onClick={async () => {
                                                 if (isReparandoCV) return; // Prevenir múltiples clics
@@ -5399,6 +6356,51 @@ const handleConfirmDisqualified = () => {
                                             ) : (
                                                 <>
                                                     <Wrench size={14}/> Reparar CV
+                                                </>
+                                            )}
+                                        </button>
+                                    )}
+                                    {/* 🔧 BOTÓN REPARAR DESDE WORKDRIVE - Para casos donde Storage también falló */}
+                                    {(candidate.ia_score === 0 || candidate.ia_score === null || !candidate.tiene_pdf) && (
+                                        <button
+                                            onClick={async () => {
+                                                if (isReparandoCV) return;
+                                                if (!confirm("¿Buscar el CV en el backup de WorkDrive? Esto puede tardar unos segundos.")) return;
+                                                
+                                                setIsReparandoCV(true);
+                                                
+                                                try {
+                                                    const result = await api.candidates.repararDesdeWorkDrive(candidate.id);
+                                                    if (result.ok) {
+                                                        alert(`✅ ${result.mensaje}\n\nArchivo: ${result.datos.archivo_encontrado}\nScore: ${result.datos.score_anterior} → ${result.datos.score_nuevo}`);
+                                                        // Recargar datos
+                                                        const data = await api.candidates.list();
+                                                        const lista = data.candidatos || data || [];
+                                                        const candidatoActualizado = lista.find(c => c.id === candidate.id);
+                                                        if (candidatoActualizado) {
+                                                            onUpdate(candidate.id, candidatoActualizado);
+                                                        }
+                                                    } else {
+                                                        alert(`❌ ${result.error || result.mensaje}`);
+                                                    }
+                                                } catch (error) {
+                                                    console.error("Error reparando desde WorkDrive:", error);
+                                                    alert("❌ Error al reparar desde WorkDrive. Revisa la consola.");
+                                                } finally {
+                                                    setIsReparandoCV(false);
+                                                }
+                                            }}
+                                            disabled={isReparandoCV}
+                                            className={`px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded border border-purple-400 flex items-center gap-2 transition-all shadow-lg shadow-purple-900/20 ${isReparandoCV ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                            title="Buscar CV en backup de Zoho WorkDrive"
+                                        >
+                                            {isReparandoCV ? (
+                                                <>
+                                                    <Loader2 size={14} className="animate-spin"/> Buscando en WorkDrive...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <CloudDownload size={14}/> Recuperar de WorkDrive
                                                 </>
                                             )}
                                         </button>
@@ -6468,6 +7470,10 @@ const { google } = require("googleapis");
 const nodemailer = require("nodemailer");
 require("dotenv").config();
 const fichaGenerator = require("./services/fichaGenerator");
+const {buscarArchivoEnWorkDrive, 
+  descargarArchivoDeWorkDrive 
+} = require('./zohoWorkDrive');
+
 
 // ========================================================================
 // 📧 CONFIGURACIÓN DE NODEMAILER (PARA ENVÍO DE EMAILS CON HTML)
@@ -7432,34 +8438,29 @@ async function analizarCorreos() {
       console.log("📝 Generando reseña del CV...");
       const reseñaCV = await generarResenaCV(pdfText, datosZoho.puesto || "General");
       
-      let reseñaVideo = null;
-      let videoError = null;
-      let videoLinkPublico = null;
-      
-      // Si hay video (del email o del webhook), procesarlo
+      // 🎥 NUEVA LÓGICA: Video se procesa en background (NO bloquea)
       const videoUrlParaAnalizar = videoUrl || datosZoho.video_url;
+      let videoStatus = "none";
+      
       if (videoUrlParaAnalizar) {
         const origenVideo = videoUrl ? "adjunto en email (subido a Storage)" : "link del webhook";
-        console.log(`🎥 Procesando video y generando reseña... (Origen: ${origenVideo})`);
-        const resultadoVideo = await generarResenaVideo(videoUrlParaAnalizar, datosZoho.puesto || "General");
+        console.log(`🎥 Video detectado (${origenVideo}). Se procesará en background...`);
+        videoStatus = "pending";
         
-        if (resultadoVideo.reseña) {
-          reseñaVideo = resultadoVideo.reseña;
-          console.log("✅ Reseña del video generada correctamente");
-        } else {
-          videoError = resultadoVideo.error;
-          videoLinkPublico = resultadoVideo.linkPublico;
-          console.log(`⚠️ ${videoError}`);
-        }
+        // Disparar procesamiento en background (NO bloquea el ciclo IMAP)
+        procesarVideoEnBackground(safeId, videoUrlParaAnalizar, datosZoho.puesto || "General")
+          .catch(error => {
+            console.error(`❌ Error procesando video en background para ${safeId}:`, error.message);
+          });
       }
 
-      // 11. IA CALIBRADA (Cruce de Datos: Formulario + CV + Video)
-      console.log("🤖 Calibrando Score (Formulario + CV + Video)...");
+      // 11. IA CALIBRADA (Cruce de Datos: Formulario + CV) - SIN VIDEO por ahora
+      console.log("🤖 Calibrando Score (Formulario + CV)...");
       
       // Preparar datos del formulario para el análisis
       const datosFormulario = JSON.stringify(datosZoho.respuestas_filtro || "Vacio");
       
-      // Llamar a la función mejorada que acepta reseñas
+      // Llamar a la función mejorada que acepta reseñas (solo CV por ahora)
       let analisisIA = { score: 50, motivos: "Pendiente", alertas: [] };
       try {
           analisisIA = await verificaConocimientosMinimos(
@@ -7467,24 +8468,19 @@ async function analizarCorreos() {
             datosFormulario, // Respuestas del formulario
             "", // declaraciones (vacío por ahora)
             reseñaCV, // Reseña del CV
-            reseñaVideo // Reseña del video (puede ser null)
+            null // Reseña del video (null porque se procesa en background)
           );
           
-          // Limitar score según si el video se procesó exitosamente
-          if (reseñaVideo) {
-              // Si el video se procesó correctamente, límite de 80
-              analisisIA.score = Math.min(analisisIA.score, 80);
-          } else {
-              // Si NO hay video procesado (falló o no existe), límite de 75
+          // Limitar score cuando NO hay video procesado aún (máximo 75)
+          if (videoStatus === "pending") {
               analisisIA.score = Math.min(analisisIA.score, 75);
-          }
-          
-          // Si hay error con el video, agregar alerta
-          if (videoError) {
-            if (!Array.isArray(analisisIA.alertas)) {
-              analisisIA.alertas = [];
-            }
-            analisisIA.alertas.push(`Video no procesado: ${videoError}`);
+              if (!Array.isArray(analisisIA.alertas)) {
+                analisisIA.alertas = [];
+              }
+              analisisIA.alertas.push("Video pendiente de análisis");
+          } else {
+              // Si NO hay video, límite de 75
+              analisisIA.score = Math.min(analisisIA.score, 75);
           }
       } catch (e) { 
           console.error("Error IA:", e.message);
@@ -7507,9 +8503,9 @@ async function analizarCorreos() {
         
         // Reseñas generadas por IA
         reseña_cv: reseñaCV,
-        reseña_video: reseñaVideo || null,
-        video_error: videoError || null, // Error si el video no se pudo procesar
-        video_link_publico: videoLinkPublico, // Si el link es público o no
+        reseña_video: null, // Se actualizará cuando termine el procesamiento del video
+        video_status: videoStatus, // "pending", "none", o "completed" (se actualiza después)
+        video_error: null, // Se actualizará si hay error en el procesamiento
         
         actualizado_en: admin.firestore.FieldValue.serverTimestamp()
       };
@@ -7521,8 +8517,14 @@ async function analizarCorreos() {
         updateData.video_tipo = "archivo";
         console.log(`✅ Video URL actualizado desde email: ${videoUrl.substring(0, 50)}...`);
       } else if (videoUrl && datosZoho.video_url) {
-        // Si ya había un video_url del webhook (link pegado), lo mantenemos
+        // Si ya había un video_url del webhook (link pegado), lo mantenemos y guardamos
+        updateData.video_url = datosZoho.video_url;
+        updateData.video_tipo = datosZoho.video_tipo || "link";
         console.log(`ℹ️ Video URL ya existe desde webhook, manteniendo: ${datosZoho.video_url.substring(0, 50)}...`);
+      } else if (datosZoho.video_url && !videoUrl) {
+        // Si el video viene del webhook pero no del email, guardarlo también
+        updateData.video_url = datosZoho.video_url;
+        updateData.video_tipo = datosZoho.video_tipo || "link";
       }
       
       await docRef.set(updateData, { merge: true }); // 'merge: true' cuida de no borrar el nombre ni el email
@@ -9137,9 +10139,25 @@ async function generarResenaCV(textoCV, puesto) {
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
     
+    // Obtener fecha actual para contexto temporal
+    const ahora = new Date();
+    const añoActual = ahora.getFullYear();
+    const mesActual = ahora.getMonth() + 1; // getMonth() retorna 0-11
+    const fechaActualTexto = `${añoActual}-${String(mesActual).padStart(2, '0')}-${String(ahora.getDate()).padStart(2, '0')}`;
+    
     const prompt = `
     ACTÚA COMO: Auditor Senior de Talento para Global Talent Connections.
     OBJETIVO: Realizar una "Due Diligence" de CALIDAD y VERACIDAD del CV para el puesto de "${puesto}".
+    
+    ⏰ CONTEXTO TEMPORAL CRÍTICO:
+    - FECHA ACTUAL: ${fechaActualTexto} (Año: ${añoActual}, Mes: ${mesActual})
+    - IMPORTANTE: Las fechas de ${añoActual} NO son futuras, son fechas ACTUALES o PASADAS.
+    - Al analizar fechas en el CV:
+      * Fechas de ${añoActual}: Considerarlas como ACTUALES o PASADAS, nunca como futuras.
+      * Fechas anteriores a ${añoActual}: Son PASADAS.
+      * Solo considerar como FUTURAS fechas posteriores a ${añoActual} o fechas de ${añoActual + 1} en adelante.
+    - NO penalizar por fechas de ${añoActual} interpretándolas como futuras.
+    - Al calcular duración de empleos o gaps temporales, usar ${añoActual} como año de referencia actual.
     
     CV DEL CANDIDATO:
     ${textoCV.slice(0, 15000)}
@@ -9521,6 +10539,12 @@ async function verificaConocimientosMinimos(puesto, textoCandidato, declaracione
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); 
 
+    // Obtener fecha actual para contexto temporal
+    const ahora = new Date();
+    const añoActual = ahora.getFullYear();
+    const mesActual = ahora.getMonth() + 1;
+    const fechaActualTexto = `${añoActual}-${String(mesActual).padStart(2, '0')}-${String(ahora.getDate()).padStart(2, '0')}`;
+
     // Construir el prompt con las reseñas si están disponibles
     let fuentesInfo = `[DATOS TÉCNICOS Y RESPUESTAS DEL FORMULARIO]:\n${textoCandidato.slice(0, 15000)}`;
     
@@ -9535,6 +10559,16 @@ async function verificaConocimientosMinimos(puesto, textoCandidato, declaracione
     const prompt = `
       ACTÚA COMO: Reclutador Senior de Global Talent Connections (Criterio Unificado).
       TU OBJETIVO: Evaluar a este candidato para el puesto de "${puesto}" y asignar Score + Alertas.
+      
+      ⏰ CONTEXTO TEMPORAL CRÍTICO:
+      - FECHA ACTUAL: ${fechaActualTexto} (Año: ${añoActual}, Mes: ${mesActual})
+      - IMPORTANTE: Las fechas de ${añoActual} NO son futuras, son fechas ACTUALES o PASADAS.
+      - Al evaluar experiencia y seniority:
+        * Fechas de ${añoActual}: Considerarlas como ACTUALES o PASADAS, nunca como futuras.
+        * Fechas anteriores a ${añoActual}: Son PASADAS.
+        * Solo considerar como FUTURAS fechas posteriores a ${añoActual} o fechas de ${añoActual + 1} en adelante.
+      - NO penalizar por fechas de ${añoActual} interpretándolas como futuras.
+      - Al calcular años de experiencia, usar ${añoActual} como año de referencia actual.
       
       === FUENTES DE INFORMACIÓN ===
       ${fuentesInfo}
@@ -10594,6 +11628,201 @@ app.post("/candidatos/:id/reparar-cv", async (req, res) => {
   }
 });
 
+// ==========================================================================
+// 🔧 ENDPOINT: REPARAR CV DESDE WORKDRIVE (NUEVO)
+// ==========================================================================
+// Busca el CV en el backup de WorkDrive y lo reprocesa completamente
+
+app.post("/candidatos/:id/reparar-desde-workdrive", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const responsable = req.body.responsable || "Sistema";
+    
+    console.log(`🔧 [REPARAR-WD] Iniciando reparación desde WorkDrive para: ${id}`);
+    
+    // 1. Obtener datos del candidato
+    const docRef = firestore.collection("CVs_staging").doc(id);
+    const docSnap = await docRef.get();
+    
+    if (!docSnap.exists) {
+      return res.status(404).json({ error: "Candidato no encontrado" });
+    }
+    
+    const candidato = docSnap.data();
+    const email = candidato.email || "";
+    const nombre = candidato.nombre || "";
+    
+    console.log(`📋 [REPARAR-WD] Buscando CV para: ${nombre} (${email})`);
+    
+    // 2. Construir términos de búsqueda
+    // Intentamos varias estrategias para encontrar el archivo
+    const terminosBusqueda = [];
+    
+    // Por email (más preciso)
+    if (email) {
+      const emailSafe = email.replace(/[^a-zA-Z0-9]/g, '_');
+      terminosBusqueda.push(emailSafe);
+      terminosBusqueda.push(email.split('@')[0]); // Solo la parte antes del @
+    }
+    
+    // Por nombre
+    if (nombre) {
+      const nombreSafe = nombre.replace(/[^a-zA-Z0-9\s]/g, '').trim();
+      terminosBusqueda.push(nombreSafe);
+      // También el primer nombre solo
+      const primerNombre = nombreSafe.split(' ')[0];
+      if (primerNombre.length > 2) {
+        terminosBusqueda.push(primerNombre);
+      }
+    }
+    
+    // Por ID del documento
+    terminosBusqueda.push(id);
+    
+    // 3. Buscar en WorkDrive
+    let archivoEncontrado = null;
+    
+    for (const termino of terminosBusqueda) {
+      if (!termino) continue;
+      
+      console.log(`🔍 [REPARAR-WD] Buscando con término: "${termino}"`);
+      
+      try {
+        const resultados = await buscarArchivoEnWorkDrive(termino);
+        
+        // Filtrar solo PDFs
+        const pdfs = resultados.filter(f => 
+          f.attributes?.name?.toLowerCase().endsWith('.pdf') ||
+          f.attributes?.extension === 'pdf'
+        );
+        
+        if (pdfs.length > 0) {
+          // Tomar el más reciente o el que mejor coincida
+          archivoEncontrado = pdfs[0];
+          console.log(`✅ [REPARAR-WD] PDF encontrado: ${archivoEncontrado.attributes?.name}`);
+          break;
+        }
+      } catch (searchError) {
+        console.warn(`⚠️ [REPARAR-WD] Error buscando "${termino}":`, searchError.message);
+      }
+    }
+    
+    if (!archivoEncontrado) {
+      return res.status(404).json({
+        ok: false,
+        error: "CV no encontrado en WorkDrive",
+        mensaje: "No se encontró ningún PDF que coincida con este candidato en el backup de WorkDrive.",
+        terminos_buscados: terminosBusqueda.filter(t => t)
+      });
+    }
+    
+    // 4. Descargar el archivo de WorkDrive
+    console.log(`📥 [REPARAR-WD] Descargando: ${archivoEncontrado.id}`);
+    const pdfBuffer = await descargarArchivoDeWorkDrive(archivoEncontrado.id);
+    
+    // 5. Subir a Firebase Storage
+    const fileName = `CVs_staging/files/${id}_CV.pdf`;
+    const bucketFile = bucket.file(fileName);
+    
+    await bucketFile.save(pdfBuffer, {
+      metadata: { contentType: 'application/pdf' }
+    });
+    
+    // Generar URL firmada
+    const [signedUrl] = await bucketFile.getSignedUrl({
+      action: 'read',
+      expires: '01-01-2035'
+    });
+    
+    console.log(`✅ [REPARAR-WD] PDF subido a Storage: ${fileName}`);
+    
+    // 6. Extraer texto del PDF
+    const pdfData = await pdfParse(pdfBuffer);
+    const textoCV = pdfData.text.slice(0, 20000);
+    
+    console.log(`📝 [REPARAR-WD] Texto extraído: ${textoCV.length} caracteres`);
+    
+    // 7. Generar reseña del CV con IA
+    const reseñaCV = await generarResenaCV(textoCV, candidato.puesto || "General");
+    console.log(`🤖 [REPARAR-WD] Reseña generada`);
+    
+    // 8. Calcular score
+    const respuestasFiltro = candidato.respuestas_filtro || {};
+    const datosFormulario = JSON.stringify(respuestasFiltro);
+    
+    const analisisIA = await verificaConocimientosMinimos(
+      candidato.puesto || "General",
+      datosFormulario,
+      "",
+      reseñaCV,
+      candidato.reseña_video || null
+    );
+    
+    // Aplicar límites según origen
+    const origen = candidato.origen || "";
+    const tieneVideo = !!candidato.reseña_video;
+    
+    if (origen.includes("zoho") || origen.includes("webhook")) {
+      analisisIA.score = Math.min(analisisIA.score, tieneVideo ? 80 : 75);
+    } else {
+      analisisIA.score = Math.min(analisisIA.score, tieneVideo ? 75 : 70);
+    }
+    
+    // 9. Actualizar Firestore
+    const updateData = {
+      cv_url: signedUrl,
+      tiene_pdf: true,
+      texto_extraido: textoCV,
+      reseña_cv: reseñaCV,
+      ia_score: analisisIA.score,
+      ia_motivos: analisisIA.motivos,
+      ia_alertas: analisisIA.alertas || [],
+      ia_status: "processed",
+      actualizado_en: admin.firestore.FieldValue.serverTimestamp(),
+      
+      // Registro de la reparación
+      reparacion_workdrive: {
+        fecha: new Date().toISOString(),
+        archivo_original: archivoEncontrado.attributes?.name || "desconocido",
+        archivo_id: archivoEncontrado.id,
+        responsable: responsable
+      },
+      
+      // Historial
+      historial_movimientos: admin.firestore.FieldValue.arrayUnion({
+        date: new Date().toISOString(),
+        event: 'CV Reparado desde WorkDrive',
+        detail: `CV recuperado del backup (${archivoEncontrado.attributes?.name}). Nuevo score: ${analisisIA.score}`,
+        usuario: responsable
+      })
+    };
+    
+    await docRef.update(updateData);
+    
+    console.log(`✅ [REPARAR-WD] Reparación completada. Score: ${analisisIA.score}`);
+    
+    res.json({
+      ok: true,
+      mensaje: "CV recuperado y reprocesado exitosamente desde WorkDrive",
+      datos: {
+        archivo_encontrado: archivoEncontrado.attributes?.name,
+        cv_url: signedUrl,
+        tiene_pdf: true,
+        score_anterior: candidato.ia_score || 0,
+        score_nuevo: analisisIA.score,
+        motivos: analisisIA.motivos,
+        alertas: analisisIA.alertas || []
+      }
+    });
+    
+  } catch (error) {
+    console.error("❌ [REPARAR-WD] Error:", error);
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
 // ==========================================
 // 📦 2. FRONTEND (Sirve la página web)
 // ==========================================
@@ -11159,6 +12388,177 @@ async function generarResenaVideo(videoUrl, puesto) {
       error: `Error al procesar video: ${error.message}`,
       linkPublico: null
     };
+  }
+}
+
+// ==========================================
+// 🎥 PROCESAMIENTO ASÍNCRONO DE VIDEOS
+// ==========================================
+
+/**
+ * Procesa un video en background sin bloquear el hilo principal
+ * Esta función se ejecuta de forma asíncrona después de guardar el candidato inicial
+ * 
+ * @param {string} candidatoId - ID del candidato (safeId)
+ * @param {string} videoUrl - URL del video a procesar
+ * @param {string} puesto - Puesto al que aplica el candidato
+ */
+async function procesarVideoEnBackground(candidatoId, videoUrl, puesto) {
+  const logPrefix = '🎥 [BACKGROUND]';
+  
+  try {
+    console.log(`${logPrefix} ═══════════════════════════════════════════`);
+    console.log(`${logPrefix} Iniciando procesamiento de video en background`);
+    console.log(`${logPrefix} Candidato ID: ${candidatoId}`);
+    console.log(`${logPrefix} Video URL: ${videoUrl.substring(0, 100)}...`);
+    console.log(`${logPrefix} Puesto: ${puesto}`);
+    
+    // Actualizar estado a "processing" para indicar que está en proceso
+    const docRef = firestore.collection(MAIN_COLLECTION).doc(candidatoId);
+    await docRef.set({
+      video_status: "processing",
+      actualizado_en: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    
+    // Procesar el video (esto puede tomar varios minutos)
+    const resultadoVideo = await generarResenaVideo(videoUrl, puesto);
+    
+    if (resultadoVideo.reseña) {
+      console.log(`${logPrefix} ✅ Reseña del video generada correctamente`);
+      
+      // Actualizar candidato con la reseña del video y regenerar score
+      await actualizarCandidatoConVideo(
+        candidatoId,
+        resultadoVideo.reseña,
+        resultadoVideo.linkPublico,
+        null // sin error
+      );
+      
+      console.log(`${logPrefix} ✅ Candidato ${candidatoId} actualizado con video procesado`);
+    } else {
+      console.error(`${logPrefix} ❌ Error procesando video: ${resultadoVideo.error}`);
+      
+      // Actualizar candidato con el error
+      await actualizarCandidatoConVideo(
+        candidatoId,
+        null, // sin reseña
+        resultadoVideo.linkPublico,
+        resultadoVideo.error
+      );
+      
+      console.log(`${logPrefix} ⚠️ Candidato ${candidatoId} actualizado con error de video`);
+    }
+    
+  } catch (error) {
+    console.error(`${logPrefix} ❌ Error crítico en procesamiento de video:`, error);
+    
+    // Actualizar estado a "error" en caso de fallo crítico
+    try {
+      const docRef = firestore.collection(MAIN_COLLECTION).doc(candidatoId);
+      await docRef.set({
+        video_status: "error",
+        video_error: `Error crítico: ${error.message}`,
+        actualizado_en: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    } catch (updateError) {
+      console.error(`${logPrefix} ❌ No se pudo actualizar estado de error:`, updateError);
+    }
+  }
+}
+
+/**
+ * Actualiza la ficha del candidato con la reseña del video y regenera el score
+ * 
+ * @param {string} candidatoId - ID del candidato (safeId)
+ * @param {string|null} reseñaVideo - Reseña generada del video (null si hubo error)
+ * @param {boolean|null} videoLinkPublico - Si el link del video es público
+ * @param {string|null} videoError - Mensaje de error si hubo problema (null si éxito)
+ */
+async function actualizarCandidatoConVideo(candidatoId, reseñaVideo, videoLinkPublico, videoError) {
+  const logPrefix = '🔄 [ACTUALIZAR]';
+  
+  try {
+    console.log(`${logPrefix} Actualizando candidato ${candidatoId} con resultado del video...`);
+    
+    const docRef = firestore.collection(MAIN_COLLECTION).doc(candidatoId);
+    const docSnap = await docRef.get();
+    
+    if (!docSnap.exists) {
+      console.error(`${logPrefix} ❌ Candidato ${candidatoId} no encontrado`);
+      return;
+    }
+    
+    const datosActuales = docSnap.data();
+    
+    // Preparar datos para actualización
+    const updateData = {
+      reseña_video: reseñaVideo || null,
+      video_error: videoError || null,
+      video_link_publico: videoLinkPublico || null,
+      video_status: reseñaVideo ? "completed" : "error",
+      actualizado_en: admin.firestore.FieldValue.serverTimestamp()
+    };
+    
+    // Si tenemos reseña del video, regenerar el score con CV + Video
+    if (reseñaVideo) {
+      console.log(`${logPrefix} Regenerando score con CV + Video...`);
+      
+      const reseñaCV = datosActuales.reseña_cv || null;
+      const respuestasFiltro = datosActuales.respuestas_filtro || {};
+      const datosFormulario = JSON.stringify(respuestasFiltro);
+      const puesto = datosActuales.puesto || "General";
+      
+      try {
+        const analisisIA = await verificaConocimientosMinimos(
+          puesto,
+          datosFormulario,
+          "", // declaraciones vacío
+          reseñaCV,
+          reseñaVideo // Ahora sí tenemos la reseña del video
+        );
+        
+        // Si el video se procesó correctamente, límite de 80
+        analisisIA.score = Math.min(analisisIA.score, 80);
+        
+        // Actualizar score y motivos
+        updateData.ia_score = analisisIA.score;
+        updateData.ia_motivos = analisisIA.motivos;
+        
+        // Actualizar alertas (remover la alerta de "Video pendiente" si existe)
+        if (Array.isArray(analisisIA.alertas)) {
+          updateData.ia_alertas = analisisIA.alertas.filter(
+            alerta => !alerta.includes("Video pendiente")
+          );
+        } else {
+          updateData.ia_alertas = [];
+        }
+        
+        console.log(`${logPrefix} ✅ Score regenerado: ${analisisIA.score}`);
+      } catch (scoreError) {
+        console.error(`${logPrefix} ❌ Error regenerando score:`, scoreError.message);
+        // No actualizamos el score si falla, pero sí guardamos la reseña del video
+      }
+    } else {
+      // Si hubo error, mantener el score actual pero agregar alerta
+      const alertasActuales = datosActuales.ia_alertas || [];
+      if (!Array.isArray(alertasActuales)) {
+        updateData.ia_alertas = [`Video no procesado: ${videoError}`];
+      } else {
+        updateData.ia_alertas = [
+          ...alertasActuales.filter(a => !a.includes("Video pendiente") && !a.includes("Video no procesado")),
+          `Video no procesado: ${videoError}`
+        ];
+      }
+    }
+    
+    // Actualizar en Firestore
+    await docRef.set(updateData, { merge: true });
+    
+    console.log(`${logPrefix} ✅ Candidato ${candidatoId} actualizado correctamente`);
+    
+  } catch (error) {
+    console.error(`${logPrefix} ❌ Error actualizando candidato:`, error);
+    throw error; // Re-lanzar para que se maneje en procesarVideoEnBackground
   }
 }
 
@@ -11765,28 +13165,105 @@ app.post("/candidatos/:id/analizar-entrevista", async (req, res) => {
 
     // 2. Prompt de Ingeniería: Fusión de Contextos
     const prompt = `
-      ACTÚA COMO: Reclutador Senior de Global Talent Connections.
-      OBJETIVO: Recalcular el puntaje del candidato cruzando su CV original con la ENTREVISTA recién realizada.
-
-      --- CONTEXTO HISTÓRICO ---
-      PERFIL ORIGINAL (CV): "${data.puesto || 'General'}"
-      ANÁLISIS PREVIO: "${data.ia_motivos || 'Sin análisis previo'}"
-      SCORE ANTERIOR: ${data.ia_score || 0}
-      
-      --- NUEVA EVIDENCIA (ENTREVISTA REAL) ---
-      "${transcript.slice(0, 15000)}"
-
-      --- TAREA DE FUSIÓN ---
-      1. VALIDACIÓN: ¿La entrevista confirma lo que decía el CV o detectas inconsistencias/mentiras?
-      2. CORRECCIÓN: Si el candidato demostró ser mejor en vivo, SUBE el score. Si fue vago o mentiroso, BÁJALO.
-      3. FLAGS: Genera nuevas alertas si detectas riesgos (ej: "Inglés peor de lo esperado", "Dudas sobre disponibilidad").
-
-      SALIDA JSON ÚNICAMENTE:
-      {
-        "score": (0-100),
-        "motivos": "Nuevo resumen integrando la entrevista. Ej: 'Mantiene un perfil sólido en React, pero se detectó nivel de inglés inferior al B2 declarado en CV...'",
-        "alertas": ["Alerta 1", "Alerta 2"]
-      }
+    ACTÚA COMO: Reclutador Senior de Global Talent Connections.
+    OBJETIVO: Recalcular el puntaje del candidato cruzando toda la información previa (CV + Video + Formulario) con la ENTREVISTA recién realizada.
+    
+    --- CONTEXTO HISTÓRICO (FUENTES DE VERDAD PREVIAS) ---
+    
+    PERFIL SOLICITADO: "${data.puesto || 'General'}"
+    
+    ANÁLISIS DEL CV:
+    "${data.reseña_cv || 'Sin análisis de CV disponible'}"
+    
+    ANÁLISIS DEL VIDEO DE PRESENTACIÓN:
+    "${data.reseña_video || 'Sin análisis de video disponible'}"
+    
+    SCORE INICIAL (basado en CV y formulario): ${data.ia_score || 0}
+    MOTIVOS DEL SCORE INICIAL: "${data.ia_motivos || 'Sin análisis previo'}"
+    
+    DATOS DECLARADOS EN FORMULARIO:
+    - Salario aceptado: ${data.respuestasfiltro?.salario || 'No especificado'}
+    - Acepta monitoreo: ${data.respuestasfiltro?.monitoreo || 'No especificado'}
+    - Disponibilidad: ${data.respuestasfiltro?.disponibilidad || 'No especificado'}
+    - Herramientas clave: ${data.respuestasfiltro?.herramientas || 'No especificado'}
+    
+    --- NUEVA EVIDENCIA (ENTREVISTA EN VIVO) ---
+    TRANSCRIPCIÓN:
+    "${transcript.slice(0, 15000)}"
+    
+    --- TAREA DE CONTRASTACIÓN ---
+    
+    1. 📋 VALIDACIÓN DE EXPERIENCIA:
+       - ¿El candidato puede PROFUNDIZAR en la experiencia declarada en el CV con ejemplos concretos, o sus respuestas son vagas?
+       - ¿Los logros/herramientas mencionados en CV se sostienen cuando se le pregunta por detalles específicos?
+       - ¿Demuestra conocimiento real de las herramientas del puesto, o solo las "conoce de nombre"?
+    
+    2. 🔄 CONSISTENCIA ENTRE FUENTES:
+       - ¿Hay CONTRADICCIONES entre CV, video, formulario y lo dicho en entrevista? (ej: años de experiencia, nivel de inglés, disponibilidad)
+       - ¿El nivel de comunicación del video se mantiene en la entrevista, o era un video sobre-ensayado?
+       - ¿Cambió de posición sobre condiciones laborales (salario, monitoreo, horarios) vs lo declarado en el formulario?
+    
+    3. 🎯 AJUSTE DE SCORE:
+       - SUBE (+10 a +20): Si demuestra MÁS conocimiento/experiencia de lo que el CV sugería, con ejemplos sólidos y actitud proactiva.
+       - MANTIENE (±5): Si confirma el nivel del CV sin sorpresas, positivas o negativas.
+       - BAJA (-10 a -30): Si respuestas vagas/inconsistencias revelan que el CV estaba inflado, o detectas banderas rojas nuevas (actitud, nivel técnico inferior, cambios de posición).
+    
+    4. 🚩 DETECCIÓN DE BANDERAS ROJAS:
+       - Genera ALERTAS específicas si detectas: nivel de inglés inferior al declarado, inconsistencias sobre experiencia, cambios en disponibilidad/salario, respuestas evasivas sobre logros, actitud problemática, señales de doble empleo no declarado.
+    
+    --- CALIBRACIÓN DE TONO (usa estos ejemplos como guía) ---
+    
+    VALIDACIÓN POSITIVA (Score sube):
+    - El candidato profundiza con ejemplos concretos que el CV no reflejaba bien
+    - Demuestra dominio técnico real de herramientas clave del puesto
+    - Actitud profesional y preparación evidente
+    → Tono: "La entrevista valida y amplía el perfil. Demuestra [skill específico] con ejemplos detallados de [contexto]. Se eleva el score debido a profundidad técnica superior a lo reflejado en CV."
+    
+    CONFIRMACIÓN (Score mantiene):
+    - La entrevista confirma lo analizado en CV y video
+    - Sin inconsistencias relevantes ni sorpresas
+    - Nivel técnico/actitudinal esperado
+    → Tono: "La entrevista es consistente con el análisis previo. Sostiene el nivel declarado en [áreas clave]. Se mantiene el score."
+    
+    DETECCIÓN DE INFLADO (Score baja):
+    - Respuestas vagas que no sostienen la experiencia del CV
+    - Inconsistencias entre fuentes (CV vs entrevista)
+    - Nivel técnico/inglés inferior al declarado
+    - Banderas rojas nuevas detectadas
+    → Tono: "La entrevista expone discrepancias con el CV. No pudo dar ejemplos concretos sobre [tema declarado]. [Mencionar inconsistencias específicas]. Se reduce el score."
+    
+    --- EJEMPLOS DE OUTPUT POR ÁREA (PATRONES DE REFERENCIA) ---
+    
+    [ÁREA TÉCNICA - Automatización/Desarrollo]
+    {
+      "score": 75,
+      "motivos": "La entrevista supera las expectativas del CV. Aunque el CV presentaba descripciones básicas, demostró dominio avanzado de las herramientas clave del puesto (Make, Zapier) con ejemplos detallados de workflows implementados. Validó métricas del logro declarado (reducción 40% en tiempos) con contexto técnico sólido. El análisis previo del video sobre actitud profesional se confirma con preparación evidente. Score elevado +15 puntos por profundidad técnica demostrada.",
+      "alertas": []
+    }
+    
+    [ÁREA COMUNICACIÓN/GESTIÓN - RRHH/Marketing]
+    {
+      "score": 58,
+      "motivos": "La entrevista confirma el perfil medio-bajo detectado en CV. Sostiene experiencia en procesos de reclutamiento con ejemplos coherentes pero sin métricas específicas de impacto. Las herramientas mencionadas (ATS básico, LinkedIn Recruiter) se validan con uso intermedio, no avanzado. Mantiene la estabilidad actitudinal del video. No hay inconsistencias graves entre fuentes. Score se mantiene como reflejo de un perfil que cumple mínimos sin destacarse.",
+      "alertas": ["Experiencia limitada en estrategias de employer branding"]
+    }
+    
+    [ÁREA ANALÍTICA - Contabilidad/Datos]
+    {
+      "score": 42,
+      "motivos": "La entrevista revela brechas significativas con el CV. Aunque declara experiencia con software contable avanzado (QuickBooks, SAP), no pudo explicar procesos de conciliación bancaria ni elaboración de estados financieros cuando se le solicitó detalle. Las respuestas sobre manejo de cierres contables fueron genéricas sin demostrar conocimiento práctico. Se detecta inconsistencia en nivel de Excel (CV: avanzado, entrevista: intermedio básico). Score reducido -18 puntos por falta de profundidad técnica comprobable.",
+      "alertas": ["Conocimiento superficial de software contable declarado", "Nivel de Excel inferior al declarado"]
+    }
+    
+    --- SALIDA JSON ÚNICAMENTE ---
+    
+    Devuelve SOLO este JSON sin texto adicional:
+    
+    {
+      "score": (0-100, ajustado según entrevista),
+      "motivos": "Párrafo de 4-6 líneas que CONTRASTA las fuentes previas (CV + Video + Formulario) con la entrevista. Menciona: 1) Qué se validó, 2) Qué inconsistencias se detectaron, 3) Por qué el score cambió o se mantuvo, 4) Puntos específicos de la entrevista que fundamentan la decisión. Tono profesional y objetivo.",
+      "alertas": ["Array de strings con banderas rojas específicas. Ejemplos: 'Nivel de inglés B1, no B2 declarado', 'No pudo profundizar en herramienta X del CV', 'Cambió posición sobre disponibilidad', 'Respuestas evasivas sobre logros específicos'"]
+    }
     `;
 
     // 3. Ejecución IA

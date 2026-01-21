@@ -22,6 +22,10 @@ const { google } = require("googleapis");
 const nodemailer = require("nodemailer");
 require("dotenv").config();
 const fichaGenerator = require("./services/fichaGenerator");
+const {buscarArchivoEnWorkDrive, 
+  descargarArchivoDeWorkDrive 
+} = require('./zohoWorkDrive');
+
 
 // ========================================================================
 // 📧 CONFIGURACIÓN DE NODEMAILER (PARA ENVÍO DE EMAILS CON HTML)
@@ -4176,6 +4180,201 @@ app.post("/candidatos/:id/reparar-cv", async (req, res) => {
   }
 });
 
+// ==========================================================================
+// 🔧 ENDPOINT: REPARAR CV DESDE WORKDRIVE (NUEVO)
+// ==========================================================================
+// Busca el CV en el backup de WorkDrive y lo reprocesa completamente
+
+app.post("/candidatos/:id/reparar-desde-workdrive", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const responsable = req.body.responsable || "Sistema";
+    
+    console.log(`🔧 [REPARAR-WD] Iniciando reparación desde WorkDrive para: ${id}`);
+    
+    // 1. Obtener datos del candidato
+    const docRef = firestore.collection("CVs_staging").doc(id);
+    const docSnap = await docRef.get();
+    
+    if (!docSnap.exists) {
+      return res.status(404).json({ error: "Candidato no encontrado" });
+    }
+    
+    const candidato = docSnap.data();
+    const email = candidato.email || "";
+    const nombre = candidato.nombre || "";
+    
+    console.log(`📋 [REPARAR-WD] Buscando CV para: ${nombre} (${email})`);
+    
+    // 2. Construir términos de búsqueda
+    // Intentamos varias estrategias para encontrar el archivo
+    const terminosBusqueda = [];
+    
+    // Por email (más preciso)
+    if (email) {
+      const emailSafe = email.replace(/[^a-zA-Z0-9]/g, '_');
+      terminosBusqueda.push(emailSafe);
+      terminosBusqueda.push(email.split('@')[0]); // Solo la parte antes del @
+    }
+    
+    // Por nombre
+    if (nombre) {
+      const nombreSafe = nombre.replace(/[^a-zA-Z0-9\s]/g, '').trim();
+      terminosBusqueda.push(nombreSafe);
+      // También el primer nombre solo
+      const primerNombre = nombreSafe.split(' ')[0];
+      if (primerNombre.length > 2) {
+        terminosBusqueda.push(primerNombre);
+      }
+    }
+    
+    // Por ID del documento
+    terminosBusqueda.push(id);
+    
+    // 3. Buscar en WorkDrive
+    let archivoEncontrado = null;
+    
+    for (const termino of terminosBusqueda) {
+      if (!termino) continue;
+      
+      console.log(`🔍 [REPARAR-WD] Buscando con término: "${termino}"`);
+      
+      try {
+        const resultados = await buscarArchivoEnWorkDrive(termino);
+        
+        // Filtrar solo PDFs
+        const pdfs = resultados.filter(f => 
+          f.attributes?.name?.toLowerCase().endsWith('.pdf') ||
+          f.attributes?.extension === 'pdf'
+        );
+        
+        if (pdfs.length > 0) {
+          // Tomar el más reciente o el que mejor coincida
+          archivoEncontrado = pdfs[0];
+          console.log(`✅ [REPARAR-WD] PDF encontrado: ${archivoEncontrado.attributes?.name}`);
+          break;
+        }
+      } catch (searchError) {
+        console.warn(`⚠️ [REPARAR-WD] Error buscando "${termino}":`, searchError.message);
+      }
+    }
+    
+    if (!archivoEncontrado) {
+      return res.status(404).json({
+        ok: false,
+        error: "CV no encontrado en WorkDrive",
+        mensaje: "No se encontró ningún PDF que coincida con este candidato en el backup de WorkDrive.",
+        terminos_buscados: terminosBusqueda.filter(t => t)
+      });
+    }
+    
+    // 4. Descargar el archivo de WorkDrive
+    console.log(`📥 [REPARAR-WD] Descargando: ${archivoEncontrado.id}`);
+    const pdfBuffer = await descargarArchivoDeWorkDrive(archivoEncontrado.id);
+    
+    // 5. Subir a Firebase Storage
+    const fileName = `CVs_staging/files/${id}_CV.pdf`;
+    const bucketFile = bucket.file(fileName);
+    
+    await bucketFile.save(pdfBuffer, {
+      metadata: { contentType: 'application/pdf' }
+    });
+    
+    // Generar URL firmada
+    const [signedUrl] = await bucketFile.getSignedUrl({
+      action: 'read',
+      expires: '01-01-2035'
+    });
+    
+    console.log(`✅ [REPARAR-WD] PDF subido a Storage: ${fileName}`);
+    
+    // 6. Extraer texto del PDF
+    const pdfData = await pdfParse(pdfBuffer);
+    const textoCV = pdfData.text.slice(0, 20000);
+    
+    console.log(`📝 [REPARAR-WD] Texto extraído: ${textoCV.length} caracteres`);
+    
+    // 7. Generar reseña del CV con IA
+    const reseñaCV = await generarResenaCV(textoCV, candidato.puesto || "General");
+    console.log(`🤖 [REPARAR-WD] Reseña generada`);
+    
+    // 8. Calcular score
+    const respuestasFiltro = candidato.respuestas_filtro || {};
+    const datosFormulario = JSON.stringify(respuestasFiltro);
+    
+    const analisisIA = await verificaConocimientosMinimos(
+      candidato.puesto || "General",
+      datosFormulario,
+      "",
+      reseñaCV,
+      candidato.reseña_video || null
+    );
+    
+    // Aplicar límites según origen
+    const origen = candidato.origen || "";
+    const tieneVideo = !!candidato.reseña_video;
+    
+    if (origen.includes("zoho") || origen.includes("webhook")) {
+      analisisIA.score = Math.min(analisisIA.score, tieneVideo ? 80 : 75);
+    } else {
+      analisisIA.score = Math.min(analisisIA.score, tieneVideo ? 75 : 70);
+    }
+    
+    // 9. Actualizar Firestore
+    const updateData = {
+      cv_url: signedUrl,
+      tiene_pdf: true,
+      texto_extraido: textoCV,
+      reseña_cv: reseñaCV,
+      ia_score: analisisIA.score,
+      ia_motivos: analisisIA.motivos,
+      ia_alertas: analisisIA.alertas || [],
+      ia_status: "processed",
+      actualizado_en: admin.firestore.FieldValue.serverTimestamp(),
+      
+      // Registro de la reparación
+      reparacion_workdrive: {
+        fecha: new Date().toISOString(),
+        archivo_original: archivoEncontrado.attributes?.name || "desconocido",
+        archivo_id: archivoEncontrado.id,
+        responsable: responsable
+      },
+      
+      // Historial
+      historial_movimientos: admin.firestore.FieldValue.arrayUnion({
+        date: new Date().toISOString(),
+        event: 'CV Reparado desde WorkDrive',
+        detail: `CV recuperado del backup (${archivoEncontrado.attributes?.name}). Nuevo score: ${analisisIA.score}`,
+        usuario: responsable
+      })
+    };
+    
+    await docRef.update(updateData);
+    
+    console.log(`✅ [REPARAR-WD] Reparación completada. Score: ${analisisIA.score}`);
+    
+    res.json({
+      ok: true,
+      mensaje: "CV recuperado y reprocesado exitosamente desde WorkDrive",
+      datos: {
+        archivo_encontrado: archivoEncontrado.attributes?.name,
+        cv_url: signedUrl,
+        tiene_pdf: true,
+        score_anterior: candidato.ia_score || 0,
+        score_nuevo: analisisIA.score,
+        motivos: analisisIA.motivos,
+        alertas: analisisIA.alertas || []
+      }
+    });
+    
+  } catch (error) {
+    console.error("❌ [REPARAR-WD] Error:", error);
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
 // ==========================================
 // 📦 2. FRONTEND (Sirve la página web)
 // ==========================================
