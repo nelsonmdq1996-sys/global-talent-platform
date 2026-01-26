@@ -4538,6 +4538,7 @@ const LoginView = ({ onLogin }) => {
         { name: "Reyna", role: "Revision RRHH", password: "Reyna23546" },
         { name: "Norma", role: "Control de Calidad", password: "Norma63841" },
         { name: "Daniel (CEO)", role: "Dirección", password: "Daniel29476" },
+        { name: "Victor", role: "Director de Operaciones", password: "Victor84752" },
         { name: "Admin", role: "Superusuario", password: "12345" }
     ];
     
