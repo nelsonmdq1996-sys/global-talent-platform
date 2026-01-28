@@ -3239,12 +3239,17 @@ Queremos contarte que hemos revisado tu postulación y has avanzado a la siguien
 
 Tu presentación (CV, formulario y video) cumple con los estándares que buscamos en Global Talent Connections y por eso seguiremos adelante con tu candidatura. 🎯
 
-En los próximos días:
-	•	Nuestro equipo de selección analizará en detalle tu perfil.
-	•	Nos pondremos en contacto contigo por correo o WhatsApp para informarte los próximos pasos (entrevista y/o evaluaciones adicionales).
-	•	No es necesario que hagas nada por ahora, solo te pedimos que estés atento/a a tus medios de contacto.
+Antes de seguir adelante, nos gusta asegurarnos de que nuestra propuesta técnica y económica se alinee con lo que buscas:
 
-Agradecemos el tiempo, la dedicación y el interés en formar parte de nuestra comunidad de asistentes virtuales.`;
+Ofrecemos un rol  100% remoto  a jornada completa (horario España), con una base salarial de  450€ + beneficios internos. Como parte de nuestra cultura de trabajo eficiente, nos apoyamos en  Hubstaff para la gestión de tareas y transparencia operativa.
+
+Si estás de acuerdo con estos puntos, ¿tendrías disponibilidad para una breve llamada de confirmación y validación? Nos hace mucha ilusión contarte más sobre el proyecto.
+
+Agradecemos el tiempo, la dedicación y el interés en formar parte de nuestra comunidad de asistentes virtuales.
+
+¡Un saludo! 
+Global Talent Connections
+https://globaltalentconnections.es`;
     
     const body = encodeURIComponent(bodyText);
     
