@@ -465,6 +465,7 @@ const PUESTOS_DISPONIBLES = [
     "Asistente de Gestión de Procesos",
     "Asistente Diseñador/a de Productos e Interiores",
     "Asistente Técnico/a de Proyectos Acústicos",
+    "Asistente Virtual de Asistencia Via y Atención al Cliente",
     "Asistente de Atención al Cliente",
     "Asistente de Ventas y Prospección",
     "Asistente de Soporte Técnico/TI",
@@ -483,7 +484,7 @@ const PUESTOS_DISPONIBLES = [
     "Asistente Financiero",
     "Asistente Desarrollador/a de Automatizaciones Zoho",
     "Asistente Aparejador / Arquitecto Técnico",
-    "Asistente Comercial - Remodelaciones, Reformas y Construcción",
+    "Asistente Comercial",
     "Asistente Desarrollador Odoo + Shopify",
     "Asistente Programador web (Power BI + Integración ERP/CRM",
     "Asistente de Seguridad y Salud Laboral",
@@ -1075,16 +1076,17 @@ function ExploreView({ candidates, onSelect, onUpdate, loading, onAddClick }) {
         return dateB - dateA;
     });
 
-    // 2. Filtrado (ÚNICA DECLARACIÓN) - Busca por nombre, email y puesto
+    // 2. Filtrado (ÚNICA DECLARACIÓN)
     const filtered = sortedCandidates.filter(c => {
-        if (c.stage !== 'stage_1') return false;
+        // 🔥 FIX: Permitir stage_1 O si no tiene stage definido (para candidatos legacy/migrados)
+        if (c.stage && c.stage !== 'stage_1') return false;
 
         // Filtro por puesto
         const matchesRole = roleFilter === 'Todos' || c.puesto === roleFilter;
         if (!matchesRole) return false;
 
         // Filtro de búsqueda de texto
-        if (!debouncedFilter.trim()) return true; // Si no hay filtro, mostrar todos
+        if (!debouncedFilter.trim()) return true;
 
         const termino = debouncedFilter.toLowerCase().trim();
         const nombreMatch = c.nombre?.toLowerCase().includes(termino) || false;
@@ -4973,17 +4975,31 @@ function App() {
         }
     }, []);
 
-    // 2. FUNCIÓN DE CARGA (limit alto para que tras refrescar sigan apareciendo candidatos en Gestión/Informes)
+    // 2. FUNCIÓN DE CARGA (mejora: carga condicional según la vista para evitar perder candidatos antiguos)
     const cargarDatos = async (forceRefresh = false) => {
         if (init && !forceRefresh) return;
         setLoading(true);
         try {
-            const data = await api.candidates.list({ limit: 500 });
+            let options = { limit: 500 };
+
+            // 🧠 ESTRATEGIA DE CARGA SEGÚN VISTA (SOLUCIÓN A PERFILES PERDIDOS)
+            if (activeTab === 'stage_1') options.stage = 'stage_1';
+            if (activeTab === 'stage_2') options.stage = 'stage_2';
+            if (activeTab === 'stage_3') options.stage = 'stage_3';
+            if (activeTab === 'reports') options.stage = 'stage_3'; // Informes suelen estar en stage 3
+            if (activeTab === 'trash') options.stage = 'trash';
+
+            // Para 'dashboard', 'search' cargamos global recientes (sin stage param)
+
+            console.log(`📡 Cargando datos para vista: ${activeTab} (Stage filter: ${options.stage || 'ALL USERS'})`);
+
+            const data = await api.candidates.list(options);
             // Manejar nuevo formato con paginación
             const candidatos = data.candidatos || data || [];
+
             setCandidates(candidatos);
             setInit(true);
-            console.log(`✅ Candidatos cargados: ${candidatos.length} total, stage_2: ${candidatos.filter(c => c.stage === 'stage_2').length}, stage_3: ${candidatos.filter(c => c.stage === 'stage_3').length}, papelera: ${candidatos.filter(c => c.stage === 'trash').length}`);
+            console.log(`✅ Candidatos cargados: ${candidatos.length} total.`);
         } catch (error) {
             console.error("❌ Error cargando datos:", error);
         } finally {
@@ -4993,8 +5009,12 @@ function App() {
 
     // 3. EFECTOS
     useEffect(() => {
-        if (currentUser) cargarDatos();
-    }, [currentUser]);
+        if (currentUser) {
+            // Al cambiar de tab, recargamos para asegurar que tenemos la data correcta de esa etapa
+            // Especialmente crítico para 'stage_2' donde los candidatos se "perdía"
+            cargarDatos(true);
+        }
+    }, [currentUser, activeTab]);
 
     // Cerrar menú de usuario al hacer clic fuera
     useEffect(() => {
@@ -5029,7 +5049,7 @@ function App() {
         if (updates.stage === 'stage_2') {
             finalUpdates.assignedTo = currentUser;
             finalUpdates.status_interno = 'interview_pending';
-            setActiveTab('stage_2'); // Cambiar la vista cuando se vuelve a Gestión
+            // MOVIDO: setActiveTab('stage_2') se hace DESPUÉS del update para evitar race condition
 
             // Si el candidato venía de informes (tenía informe_final_data), 
             // limpiar el informe para permitir regeneración cuando vuelva a stage_3
@@ -5070,14 +5090,24 @@ function App() {
 
         // 6. Actualizamos la BASE DE DATOS (Backend)
         // Ahora finalUpdates lleva el dato 'viewed' correcto y los marcadores preservados
-        await api.candidates.update(id, finalUpdates);
+        try {
+            await api.candidates.update(id, finalUpdates);
 
-        // 7. Si se movió a papelera, recargar candidatos para asegurar que aparezca en la vista de papelera
-        // Esperamos un poco más para asegurar que el backend haya procesado la actualización con los marcadores
+            // 7. NAVEGACIÓN SEGURA (Después de confirmar update)
+            if (updates.stage === 'stage_2') {
+                console.log("✅ Update completado. Cambiando tab a Gestión...");
+                setActiveTab('stage_2');
+            }
+        } catch (error) {
+            console.error("❌ Error actualizando candidato:", error);
+            alert("Hubo un error al guardar los cambios. Por favor recarga la página.");
+        }
+
+        // 8. Si se movió a papelera, recargar candidatos para asegurar que aparezca en la vista de papelera
         if (updates.stage === 'trash') {
             setTimeout(() => {
                 cargarDatos(true); // Forzar recarga
-            }, 1000); // Aumentado a 1 segundo para dar tiempo al backend
+            }, 1000);
         }
     };
 

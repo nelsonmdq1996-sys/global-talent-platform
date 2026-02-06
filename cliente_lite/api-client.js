@@ -65,6 +65,7 @@ const api = {
                 if (options.limit) params.append('limit', options.limit);
                 if (options.startAfter) params.append('startAfter', options.startAfter);
                 if (options.q) params.append('q', options.q);
+                if (options.stage) params.append('stage', options.stage);
 
                 const queryString = params.toString();
                 const url = queryString ? `${API_URL}/buscar?${queryString}` : `${API_URL}/buscar`;
