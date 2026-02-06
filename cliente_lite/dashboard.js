@@ -488,7 +488,8 @@ const PUESTOS_DISPONIBLES = [
     "Asistente Programador web (Power BI + Integración ERP/CRM",
     "Asistente de Seguridad y Salud Laboral",
     "Asistente de Operaciones Comerciales",
-    "Asistente de Comercio Exterior"
+    "Asistente de Comercio Exterior",
+    "Asistente de Gestión Operativa y Control de Datos"
 ];
 
 // --- NUEVA VISTA: BUSQUEDA Y TRACKING ---
